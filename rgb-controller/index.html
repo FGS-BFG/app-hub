@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="dark">
+<title>RGB Controller · Local USB control</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#141e31;--line:#29354a;--text:#f1f5fc;--muted:#a8b5cb;--blue:#678fff;--green:#62e4bc;font:16px/1.5 "Segoe UI",system-ui,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 10% 0%,#192947 0,transparent 55%),var(--bg);color:var(--text);min-height:100vh}button,input,select{font:inherit}button,select{min-height:50px;border:1px solid var(--line);border-radius:12px;padding:10px 18px;background:#24324a;color:var(--text)}button{font-weight:600;cursor:pointer;touch-action:manipulation;transition:background .15s,transform .1s}button:hover:not(:disabled){background:#344766}button:active:not(:disabled){transform:translateY(1px)}button:disabled{opacity:.38;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #99b6ff;outline-offset:3px}.accent{background:#7298ff;color:#091429;border-color:transparent}.accent:hover:not(:disabled){background:#9ab5ff}.quiet{background:transparent}.off{background:#492b3b;color:#ffd1dc;border-color:#704157}.off:hover:not(:disabled){background:#63374b}.on{background:#19483f;color:#a9fce0;border-color:#306456}.on:hover:not(:disabled){background:#256052}
+main{max-width:1250px;margin:auto;padding:32px 24px 48px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px}.brand{display:flex;align-items:center;gap:14px}.mark{width:48px;height:48px;display:flex;gap:5px;align-items:center;padding:8px;background:#1e2c45;border-radius:14px}.mark i{display:block;width:7px;border-radius:5px;height:22px;background:#ff7b97}.mark i:nth-child(2){height:32px;background:#75e0bd}.mark i:nth-child(3){height:26px;background:#719aff}h1{font-size:28px;letter-spacing:-.7px;margin:0;line-height:1.2}.subtitle{color:var(--muted);margin:5px 0 0;font-size:14px}.local-badge{font-size:13px;letter-spacing:.04em;color:var(--green);border:1px solid #315347;border-radius:999px;padding:7px 13px;white-space:nowrap}.connection{display:flex;gap:16px;justify-content:space-between;align-items:center;padding:18px 22px;margin-bottom:18px;background:#172339;border:1px solid #314461;border-radius:18px}.connection-text{display:flex;align-items:center;gap:12px}.dot{width:10px;height:10px;border-radius:50%;background:#73839c;flex-shrink:0}.dot.live{background:var(--green);box-shadow:0 0 14px #62e4bc55}#connection-status{font-weight:600}#connection-detail{font-size:13px;color:var(--muted);margin-top:2px}.connection-buttons{display:flex;gap:10px;flex-shrink:0}.layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:18px;align-items:start}.stack{display:grid;gap:18px}.panel{border-radius:20px;background:var(--panel);border:1px solid var(--line);padding:24px}h2{font-size:18px;letter-spacing:-.2px;line-height:1.3;margin:0}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#9aadce;font-size:11px;font-weight:700;margin-bottom:7px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:24px}.helper{font-size:13px;color:var(--muted);margin:14px 0 0}.preview{display:flex;align-items:center;gap:12px}.swatch{width:49px;height:49px;border:1px solid #ffffff35;border-radius:14px;background:white;box-shadow:0 5px 24px #ffffff12}#hex-value{color:#c4d2eb;font:14px ui-monospace,Consolas,monospace}.adjuster{margin:20px 0}.adjuster-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}.channel-label{display:flex;gap:9px;align-items:center;font-weight:500}.channel-dot{width:8px;height:8px;border-radius:50%;background:var(--channel)}.adjuster-controls{display:grid;grid-template-columns:50px minmax(50px,1fr) 50px;gap:12px;align-items:center}.step{padding:8px;font-size:23px;font-weight:400;line-height:1}.value{appearance:textfield;background:#0e1729;color:#f1f5fc;border:1px solid #35435c;border-radius:9px;width:84px;min-height:44px;padding:6px 9px;text-align:right;font-variant-numeric:tabular-nums}.value::-webkit-inner-spin-button{appearance:none}.unit{font-size:13px;color:var(--muted);margin-left:5px}input[type=range]{appearance:none;width:100%;height:44px;margin:0;background:transparent;cursor:pointer;touch-action:pan-y}input[type=range]::-webkit-slider-runnable-track{height:6px;background:#35435e;border-radius:10px}input[type=range]::-webkit-slider-thumb{appearance:none;width:28px;height:28px;margin-top:-11px;border-radius:50%;background:var(--channel,#8aa7ff);border:4px solid #d9e5ff;box-shadow:0 2px 8px #0008}input[type=range]::-moz-range-track{height:6px;background:#35435e;border-radius:10px}input[type=range]::-moz-range-thumb{width:24px;height:24px;border-radius:50%;background:var(--channel,#8aa7ff);border:3px solid #d9e5ff}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}.actions>*{flex:1}.colour-picker{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:50px;border:1px solid var(--line);border-radius:12px;padding:10px 18px;background:#24324a;font-weight:600;cursor:pointer}.colour-picker input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.quick-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.quick-grid button{padding:12px 7px}.red{background:#703044;border-color:#8f4157}.green{background:#205c50;border-color:#34796a}.blue{background:#2b4b88;border-color:#4168b0}.white{background:#d7e3f6;color:#17243a;border-color:#eff5ff}.red:hover:not(:disabled){background:#923d56}.green:hover:not(:disabled){background:#2b7868}.blue:hover:not(:disabled){background:#3a62a9}.white:hover:not(:disabled){background:white}.power-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.reported{padding:14px 16px;border:1px solid #30415c;border-radius:12px;margin-top:18px;background:#0f192b}.reported-label{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#8fa3c5;margin-bottom:6px}#device-state{font-size:14px;font-variant-numeric:tabular-nums}.select-label{display:block;font-size:13px;color:var(--muted);margin-bottom:8px}select{width:100%;cursor:pointer}.animation-state{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:#aebcd1;border:1px solid #35415a;border-radius:999px;padding:5px 9px}.animation-state.running{color:var(--green);border-color:#356855}.preset-row{display:grid;grid-template-columns:85px 1fr 1.4fr;gap:10px}.preset-row select{padding:10px}.preset-row button{padding:10px}.log-panel{margin-top:18px;padding:18px 24px}.log-panel summary{cursor:pointer;min-height:36px;align-content:center;color:#b3c1d8;font-weight:500}.log-panel pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:230px;overflow:auto;background:#0c1423;padding:16px;border-radius:10px;font:12px/1.7 Consolas,monospace;color:#a8c1e7}.notice{margin:0 0 18px;padding:14px 18px;border:1px solid #916045;border-radius:12px;background:#3b2a23;color:#ffdebc;font-size:14px}.notice[hidden]{display:none}footer{margin-top:22px;display:flex;justify-content:space-between;gap:16px;color:#8d9db8;font-size:12px}footer p{margin:0}a{color:#acbfff}#fullscreen{font-size:13px;min-height:42px;padding:7px 12px}.footer-controls{flex-shrink:0}
+@media(max-width:850px){.layout{grid-template-columns:1fr}main{max-width:680px;padding:22px 16px 32px}.panel{padding:20px}.local-badge{display:none}.connection{align-items:stretch;flex-direction:column;padding:18px}.connection-buttons>*{flex:1}footer{flex-direction:column}.preset-row{grid-template-columns:75px 1fr 1.4fr}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="brand"><div class="mark" aria-hidden="true"><i></i><i></i><i></i></div><div><h1>RGB Controller</h1><p class="subtitle">Your light. Direct control.</p></div></div><span class="local-badge">LOCAL USB CONTROL</span></header>
+<div id="notice" class="notice" role="alert" hidden></div>
+<section class="connection" aria-label="USB connection"><div class="connection-text"><span id="status-dot" class="dot" aria-hidden="true"></span><div><div id="connection-status" role="status">Ready to connect</div><div id="connection-detail">Connect the controller by USB, then choose its serial port.</div></div></div><div class="connection-buttons"><button id="get-state" class="quiet" data-device disabled>Get state</button><button id="connect" class="accent">Connect controller</button></div></section>
+<div class="layout">
+<div class="stack">
+<section class="panel"><div class="panel-head"><div><div class="eyebrow">Make it yours</div><h2>Colour</h2></div><div class="preview"><span id="hex-value">#FFFFFF</span><div id="swatch" class="swatch" aria-label="Selected colour: white"></div></div></div>
+<div id="rgb-controls"></div>
+<div class="actions"><label class="colour-picker">Colour picker<input id="colour-picker" type="color" value="#ffffff" aria-label="Choose a colour"></label><button id="apply-colour" class="accent" data-device disabled>Apply colour</button></div>
+<p class="helper">Adjust the colour, then apply it to turn the output on.</p>
+</section>
+<section class="panel"><div class="eyebrow">Set the level</div><h2>Brightness</h2><div id="brightness-controls"></div><div class="actions"><button id="apply-brightness" class="accent" data-device disabled>Apply brightness</button></div><p class="helper">Brightness applies separately and keeps the current power state.</p></section>
+</div>
+<div class="stack">
+<section class="panel"><div class="panel-head"><div><div class="eyebrow">Check every channel</div><h2>Quick test</h2></div></div><div class="quick-grid"><button class="red" data-colour="255,0,0" data-device disabled>Red</button><button class="green" data-colour="0,255,0" data-device disabled>Green</button><button class="blue" data-colour="0,0,255" data-device disabled>Blue</button><button class="white" data-colour="255,255,255" data-device disabled>White</button></div><div class="power-row"><button id="power-on" class="on" data-device disabled>Output ON</button><button id="power-off" class="off" data-device disabled>Output OFF</button></div><div class="reported"><div class="reported-label">Reported by controller</div><div id="device-state" role="status">Waiting for a connection</div></div></section>
+<section class="panel"><div class="panel-head"><div><div class="eyebrow">Put it in motion</div><h2>Animation</h2></div><span id="animation-state" class="animation-state" role="status">Stopped</span></div><label class="select-label" for="animation-mode">Pattern</label><select id="animation-mode"><option>Rainbow</option><option>Colour switch</option><option>Blink</option></select><div id="timing-controls"></div><div class="actions"><button id="start-animation" class="accent" data-device disabled>Start animation</button><button id="stop-animation" disabled>Stop</button></div><p class="helper">Blink uses the selected colour. Stop holds the last output. Use Output OFF to turn the LEDs off.</p></section>
+<section class="panel"><div class="panel-head"><div><div class="eyebrow">Keep a favourite</div><h2>Presets</h2></div></div><label class="select-label" for="preset-slot">Preset slot</label><div class="preset-row"><select id="preset-slot"><option>0</option><option>1</option><option>2</option><option>3</option></select><button id="save-preset" data-device disabled>Save</button><button id="load-preset" data-device disabled>Load &amp; turn on</button></div><p class="helper">Save stores the controller’s current colour and brightness in the selected slot.</p></section>
+</div></div>
+<details class="panel log-panel"><summary>Connection log</summary><pre id="log" aria-label="Serial commands and replies">Ready. Open this file in Microsoft Edge or Google Chrome.</pre><button id="clear-log" class="quiet">Clear log</button></details>
+<footer><p>Everything runs on this computer. Keep this page open during animations.<br>Closing or disconnecting keeps the last LED output. Use Output OFF first when needed.</p><div class="footer-controls"><button id="fullscreen" class="quiet">Full screen</button></div></footer>
+</main>
+<script id="controller">
+'use strict';
+const RGB = (() => {
+  function parseState(line) {
+    const m = /^STATE (ON|OFF) (100|[0-9]{1,2}) (\d{1,3}),(\d{1,3}),(\d{1,3})$/.exec(line);
+    if (!m) return null;
+    const rgb = m.slice(3).map(Number);
+    if (rgb.some(v => v > 255)) return null;
+    return {on: m[1] === 'ON', brightness: Number(m[2]), rgb};
+  }
+  function validColour(rgb) {
+    return Array.isArray(rgb) && rgb.length === 3 && rgb.every(v => Number.isInteger(v) && v >= 0 && v <= 255);
+  }
+  function frameFor(mode, step, colour) {
+    let rgb;
+    if (mode === 'Blink') return step % 2 ? 'OFF' : `SET ${colour.join(',')}`;
+    if (mode === 'Colour switch') rgb = [[255,0,0],[0,255,0],[0,0,255],[255,255,0],[0,255,255],[255,0,255],[255,255,255]][step % 7];
+    else {
+      const h = (step % 36) / 6, x = Math.round(255 * (1 - Math.abs(h % 2 - 1)));
+      rgb = [[255,x,0],[x,255,0],[0,255,x],[0,x,255],[x,0,255],[255,0,x]][Math.floor(h)];
+    }
+    return `SET ${rgb.join(',')}`;
+  }
+  class Controller {
+    constructor(serial, notify = () => {}, startupDelay = 2000) {
+      this.serial = serial; this.notify = notify; this.startupDelay = startupDelay;
+      this.port = null; this.reader = null; this.writer = null; this.readTask = null;
+      this.connected = false; this.selecting = false; this.closing = false; this.closeTask = null;
+      this.writeQueue = Promise.resolve(); this.pending = 0; this.generation = 0;
+      this.animationToken = 0; this.animationTimer = null; this.animationMode = null; this.queryTimer = null;
+      serial?.addEventListener('disconnect', e => {
+        if (e.target === this.port || e.port === this.port) void this.disconnect('USB controller disconnected');
+      });
+    }
+    async connect() {
+      if (this.connected || this.selecting || this.closing) return;
+      this.selecting = true; this.notify('connection', 'connecting');
+      let chosen;
+      try {
+        if (!this.serial) throw new Error('Open this file in a current desktop version of Microsoft Edge or Google Chrome.');
+        chosen = await this.serial.requestPort();
+        await chosen.open({baudRate: 115200});
+        this.port = chosen;
+        this.writer = chosen.writable.getWriter();
+        this.connected = true; this.generation++;
+        this.notify('connection', 'connected'); this.notify('log', 'Connected at 115200 baud');
+        this.readTask = this.readLoop(chosen);
+        this.queryTimer = setTimeout(() => { this.queryTimer = null; void this.send('GET', {manual: false}); }, this.startupDelay);
+      } catch (error) {
+        if (error.name !== 'NotFoundError') this.notify('error', `Connection failed: ${error.message}. Close other apps using the COM port and try again.`);
+        else this.notify('log', 'Connection cancelled');
+        if (this.port) await this.disconnect();
+        else if (chosen?.readable || chosen?.writable) { try { await chosen.close(); } catch {} }
+        this.notify('connection', 'disconnected');
+      } finally { this.selecting = false; }
+    }
+    async readLoop(port) {
+      let buffer = ''; const decoder = new TextDecoder();
+      try {
+        this.reader = port.readable.getReader();
+        while (this.connected && this.port === port) {
+          const {value, done} = await this.reader.read();
+          if (done) break;
+          for (const char of decoder.decode(value, {stream: true})) {
+            if (char === '\n') {
+              const line = buffer.trim(); buffer = '';
+              if (line) {
+                this.notify('log', '< ' + line);
+                const state = parseState(line);
+                if (state) this.notify('state', state);
+                else if (line.startsWith('ERR')) this.notify('error', 'Controller: ' + line);
+              }
+            } else if (char !== '\r') {
+              buffer += char;
+              if (buffer.length > 1024) buffer = '';
+            }
+          }
+        }
+      } catch (error) {
+        if (!this.closing) this.notify('error', 'Serial read failed: ' + error.message);
+      } finally {
+        this.reader?.releaseLock(); this.reader = null;
+        if (!this.closing && this.port === port) void this.disconnect('Connection ended');
+      }
+    }
+    send(command, {manual = true, animation = false} = {}) {
+      if (!this.connected || this.closing) return Promise.resolve(false);
+      if (manual) this.stopAnimation();
+      if (animation && this.pending) return Promise.resolve(false);
+      if (this.pending >= 32) { this.notify('error', 'Controller is busy. Wait a moment and try again.'); return Promise.resolve(false); }
+      const generation = this.generation, token = this.animationToken;
+      this.pending++;
+      const task = this.writeQueue.then(async () => {
+        if (!this.connected || this.closing || generation !== this.generation || (animation && token !== this.animationToken)) return false;
+        try {
+          await this.writer.write(new TextEncoder().encode(command + '\n'));
+          this.notify('log', '> ' + command);
+          return true;
+        } catch (error) {
+          this.notify('error', 'Serial write failed: ' + error.message);
+          void this.disconnect('Connection lost');
+          return false;
+        }
+      }).finally(() => { this.pending--; });
+      this.writeQueue = task.catch(() => false);
+      return task;
+    }
+    startAnimation(mode, colour, interval) {
+      if (!this.connected) throw new Error('Connect the controller first.');
+      if (!['Rainbow','Colour switch','Blink'].includes(mode) || !validColour(colour) || !Number.isInteger(interval) || interval < 150 || interval > 10000) throw new Error('Choose a valid colour and a step time from 150 to 10000 ms.');
+      this.stopAnimation();
+      const token = this.animationToken, selected = [...colour]; let step = 0;
+      this.animationMode = mode; this.notify('animation', mode);
+      const tick = async () => {
+        if (!this.connected || token !== this.animationToken) return;
+        await this.send(frameFor(mode, step++, selected), {manual:false, animation:true});
+        if (this.connected && token === this.animationToken) this.animationTimer = setTimeout(tick, interval);
+      };
+      void tick();
+    }
+    stopAnimation() {
+      clearTimeout(this.animationTimer); this.animationTimer = null;
+      this.animationToken++; this.animationMode = null; this.notify('animation', null);
+    }
+    disconnect(reason = 'Disconnected') {
+      if (this.closeTask) return this.closeTask;
+      this.closing = true; this.connected = false; this.generation++;
+      this.stopAnimation(); clearTimeout(this.queryTimer); this.queryTimer = null;
+      this.notify('connection', 'disconnecting');
+      this.closeTask = (async () => {
+        try {
+          if (this.reader) { try { await this.reader.cancel(); } catch {} }
+          await this.readTask;
+          await this.writeQueue;
+          this.writer?.releaseLock(); this.writer = null;
+          if (this.port) { try { await this.port.close(); } catch (error) { this.notify('log', 'Port close: ' + error.message); } }
+        } finally {
+          this.port = null; this.readTask = null; this.closing = false; this.closeTask = null;
+          this.notify('connection', 'disconnected'); this.notify('log', reason);
+        }
+      })();
+      return this.closeTask;
+    }
+  }
+  return {parseState, validColour, frameFor, Controller};
+})();
+</script>
+<script id="interface">
+'use strict';
+(() => {
+  const $ = id => document.getElementById(id);
+  let colour = [255,255,255], brightness = 25, interval = 500, firstState = true;
+  const logLines = [];
+  function log(line) { logLines.push(new Date().toLocaleTimeString() + '  ' + line); if (logLines.length > 300) logLines.shift(); $('log').textContent = logLines.join('\n'); $('log').scrollTop = $('log').scrollHeight; }
+  function showError(message) { $('notice').textContent = message; $('notice').hidden = false; log(message); }
+  function drawColour() {
+    const hex = '#' + colour.map(v => v.toString(16).padStart(2,'0')).join('');
+    $('swatch').style.background = hex; $('swatch').setAttribute('aria-label', 'Selected RGB: ' + colour.join(', '));
+    $('hex-value').textContent = hex.toUpperCase(); $('colour-picker').value = hex;
+    ['red','green','blue'].forEach((id, i) => setAdjuster(id, colour[i]));
+  }
+  function setAdjuster(id, value) { $(id + '-range').value = value; $(id + '-number').value = value; }
+  function adjuster(target, id, name, value, min, max, step, channel, callback) {
+    const row = document.createElement('div'); row.className = 'adjuster'; row.style.setProperty('--channel', channel);
+    row.innerHTML = `<div class="adjuster-head"><label class="channel-label" for="${id}-range"><span class="channel-dot" aria-hidden="true"></span>${name}</label><input class="value" id="${id}-number" type="number" inputmode="numeric" min="${min}" max="${max}" value="${value}" step="1" aria-label="${name} value"></div><div class="adjuster-controls"><button class="step" type="button" id="${id}-minus" aria-label="Decrease ${name}">−</button><input id="${id}-range" type="range" min="${min}" max="${max}" value="${value}" step="1"><button class="step" type="button" id="${id}-plus" aria-label="Increase ${name}">+</button></div>`;
+    $(target).append(row);
+    let current = value;
+    function update(next) { if (!Number.isFinite(next)) { setAdjuster(id, Number($(id + '-range').value)); return; } current = Math.min(max, Math.max(min, Math.round(next))); setAdjuster(id, current); callback(current); }
+    $(id + '-range').addEventListener('input', e => update(Number(e.target.value)));
+    $(id + '-number').addEventListener('change', e => update(e.target.value.trim() ? Number(e.target.value) : NaN));
+    $(id + '-minus').addEventListener('click', () => update(Number($(id + '-range').value) - step));
+    $(id + '-plus').addEventListener('click', () => update(Number($(id + '-range').value) + step));
+  }
+  ['Red','Green','Blue'].forEach((name, i) => adjuster('rgb-controls', name.toLowerCase(), name, 255, 0, 255, 10, ['#ff7d9a','#65dfb9','#79a2ff'][i], v => {colour[i] = v; drawColour();}));
+  adjuster('brightness-controls', 'brightness', 'Brightness (%)', 25, 0, 100, 5, '#b3a1ff', v => brightness = v);
+  adjuster('timing-controls', 'timing', 'Step time (ms)', 500, 150, 10000, 100, '#8baaff', v => interval = v);
+  const controller = new RGB.Controller(navigator.serial, (kind, value) => {
+    if (kind === 'log') log(value);
+    else if (kind === 'error') showError(value);
+    else if (kind === 'connection') {
+      const connected = value === 'connected', busy = value === 'connecting' || value === 'disconnecting';
+      document.querySelectorAll('[data-device]').forEach(button => button.disabled = !connected);
+      $('connect').disabled = busy || !('serial' in navigator) || !isSecureContext;
+      $('connect').textContent = connected ? 'Disconnect' : value === 'connecting' ? 'Connecting…' : value === 'disconnecting' ? 'Disconnecting…' : 'Connect controller';
+      $('status-dot').classList.toggle('live', connected);
+      $('connection-status').textContent = connected ? 'Controller connected' : value === 'connecting' ? 'Connecting to USB' : value === 'disconnecting' ? 'Disconnecting' : 'Ready to connect';
+      $('connection-detail').textContent = connected ? 'USB serial · 115200 baud · waiting for commands' : 'Connect the controller by USB, then choose its serial port.';
+      if (connected) { firstState = true; $('device-state').textContent = 'Waiting for controller state…'; }
+      if (value === 'disconnected') { firstState = true; $('device-state').textContent = 'Waiting for a connection'; }
+    } else if (kind === 'state') {
+      $('device-state').textContent = `${value.on ? 'ON' : 'OFF'}  ·  ${value.brightness}% brightness  ·  RGB ${value.rgb.join(', ')}`;
+      if (firstState) { firstState = false; colour = value.rgb; brightness = value.brightness; drawColour(); setAdjuster('brightness', brightness); }
+    } else if (kind === 'animation') {
+      $('animation-state').textContent = value ? value + ' · running' : 'Stopped';
+      $('animation-state').classList.toggle('running', Boolean(value)); $('stop-animation').disabled = !value;
+    }
+  });
+  $('connect').addEventListener('click', () => { $('notice').hidden = true; if (controller.connected) void controller.disconnect(); else void controller.connect(); });
+  const send = command => { $('notice').hidden = true; void controller.send(command); };
+  $('get-state').addEventListener('click', () => { firstState = true; send('GET'); });
+  $('apply-colour').addEventListener('click', () => send('SET ' + colour.join(',')));
+  $('apply-brightness').addEventListener('click', () => send('BRIGHT ' + brightness));
+  $('colour-picker').addEventListener('input', e => { colour = [1,3,5].map(i => parseInt(e.target.value.slice(i,i+2),16)); drawColour(); });
+  document.querySelectorAll('[data-colour]').forEach(button => button.addEventListener('click', () => { colour = button.dataset.colour.split(',').map(Number); drawColour(); send('SET ' + colour.join(',')); }));
+  $('power-on').addEventListener('click', () => send('ON')); $('power-off').addEventListener('click', () => send('OFF'));
+  $('save-preset').addEventListener('click', () => send('SAVE ' + $('preset-slot').value)); $('load-preset').addEventListener('click', () => { firstState = true; send('LOAD ' + $('preset-slot').value); });
+  $('start-animation').addEventListener('click', () => { try { $('notice').hidden = true; controller.startAnimation($('animation-mode').value, colour, interval); } catch (error) { showError(error.message); } });
+  $('stop-animation').addEventListener('click', () => controller.stopAnimation());
+  $('clear-log').addEventListener('click', () => { logLines.length = 0; $('log').textContent = ''; });
+  $('fullscreen').addEventListener('click', async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); } catch { showError('Full screen is unavailable in this browser window.'); } });
+  document.addEventListener('fullscreenchange', () => $('fullscreen').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen');
+  document.addEventListener('visibilitychange', () => { if (document.hidden && controller.animationMode !== null) { controller.stopAnimation(); log('Animation stopped because this page was hidden. The last output remains on.'); } });
+  if (!('serial' in navigator) || !isSecureContext) {
+    $('connect').disabled = true;
+    showError('USB serial is unavailable here. Open this HTML file in a current desktop Microsoft Edge or Google Chrome. A company browser policy may also restrict serial access.');
+  }
+})();
+</script>
+</body>
+</html>
