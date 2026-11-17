@@ -1,5 +1,11 @@
 # MCI 304 USB troubleshooting guide
 
+The maintained source and authenticated Google Drive backend are in the private [Mci-Test-App repository](https://github.com/FGS-BFG/Mci-Test-App). This directory is the public browser copy.
+
+Use **Save to Drive** to freeze a report and save it through the authenticated Google portal. **Saved reports** opens the central library. **New report** starts a blank report after the current report is confirmed in Drive. Failed saves keep the same frozen report for retry. **Download copy** is separate from central saving.
+
+Reports belong in **1-Current productions → Field reports**. The portal uses the accessing user's Google permissions. Initial Google authorization and Drive API enablement are still pending verification; a real central save has not yet been confirmed.
+
 Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Close the other locker applications, select **Connect locker USB**, then choose master C's COM port.
 
 The guide walks through the mains cycle, master reset, five-board ISB checks, physical self-test and connection comparisons. It can monitor raw sensor inputs on one board or all five, and download a report with timestamps and raw USB traffic. Session data stays in that browser until downloaded.
