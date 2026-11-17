@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173d3a">
+  <title>Dublin Locker Field Guide</title>
+  <meta name="description" content="Step-by-step MCI 304 troubleshooting. Check each board, record responses, and trace a fault through the board, cable and hub connection.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#step">Skip to current step</a>
+  <header class="topbar"><div class="brand"><span class="brand-icon" aria-hidden="true">▦</span><span>Locker field guide<small>FGS · DUBLIN T2</small></span></div><div class="top-actions"><span class="device-tag">MCI 304</span><button class="text-button" id="save-report">Save report <span aria-hidden="true">↗</span></button></div></header>
+  <div class="workspace">
+    <aside class="sidebar" aria-label="Guide progress"><div class="sidebar-title">SERVICE WORKFLOW</div><ol id="progress"></ol><div class="board-map"><div class="sidebar-title">BOARD LAYOUT</div><div class="map-row" aria-label="Boards A B C D E with C as master"><span>A</span><span>B</span><span class="master">C<small>MASTER</small></span><span>D</span><span>E</span></div><p>USB connects to C.<br>All slave boards talk to C.</p></div><div class="session-status"><span class="status-dot"></span><span id="storage-label">Progress saved on this device</span></div><button class="text-button restart" id="restart">Start a new session</button></aside>
+    <main id="main"><div id="usb-root"></div><div class="context-line"><span>Dublin T2 lockers</span><span class="context-divider">/</span><span id="stage-label">Prepare the system</span></div><section id="step" class="step-card" aria-live="polite" tabindex="-1"></section><div class="under-card"><span>One check at a time. Keep this page open while testing.</span><a href="assets/troubleshooting.docx" download>Word procedure ↗</a></div></main>
+    <aside class="reference" aria-label="Photo reference"><div class="reference-head"><div><span class="sidebar-title">AT THE LOCKER</span><h2>Connection reference</h2></div><span aria-hidden="true">⌖</span></div><div class="photo-tabs" role="tablist" aria-label="Board photograph"><button id="master-tab" role="tab" aria-selected="true" data-photo="master">Master C</button><button id="slave-tab" role="tab" aria-selected="false" data-photo="slave">Slave board</button></div><button class="photo-button" id="zoom-photo" aria-label="Enlarge annotated board photograph"><img id="reference-photo" src="assets/master.png" alt="Annotated master C: USB, two power supplies, power and UART link, and sensor connectors."><span>View full image <span aria-hidden="true">⤢</span></span></button><div class="reference-facts"><div><i class="cable blue"></i><span>Black cable</span><strong>USB to PC</strong></div><div><i class="cable yellow"></i><span>Yellow sleeve</span><strong>5–7.5 V</strong></div><div><i class="cable red"></i><span>Red sleeve</span><strong>12 V</strong></div><div><i class="cable purple"></i><span>Rainbow cable</span><strong>Power + UART</strong></div></div></aside>
+  </div>
+  <dialog id="photo-dialog"><div class="dialog-bar"><strong id="photo-title">Master C connections</strong><button id="close-photo" class="icon-button" aria-label="Close enlarged photograph">✕</button></div><img id="full-photo" src="assets/master.png" alt="Enlarged annotated master C photograph"></dialog>
+  <dialog id="restart-dialog" class="confirm-dialog"><h2>Start a new session?</h2><p>Save the current report first if you need to keep these observations.</p><div class="confirm-actions"><button id="cancel-restart" class="secondary">Keep this session</button><button id="confirm-restart" class="primary">Start new session</button></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body></html>
