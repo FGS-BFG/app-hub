@@ -8,6 +8,12 @@ import {
 const replies = (...failed) => Object.fromEntries(
   BOARDS.map(board => [board, failed.includes(board) ? 'no-response' : 'responded']),
 );
+
+test('the generic guide starts with a blank location and moves from power to USB', () => {
+  const s=freshSession();
+  assert.equal(s.details.location,'');
+  assert.equal(nextStep({...s,step:'power'}),'connect');
+});
 function comparison(a='responded', b='no-response') {
   return {
     ...freshSession(), step:'swap', initial:replies('A'), recheck:replies('A'),
@@ -22,6 +28,7 @@ test('new sessions have no assumed test outcomes and do not share mutable state'
   assert.deepEqual(one.swapped, {});
   assert.equal(one.selftest, '');
   assert.equal(one.acknowledged, false);
+  assert.equal(one.details.location, '');
   one.initial.A='responded';
   one.details.technician='Technician';
   assert.deepEqual(two.initial, {});
@@ -242,10 +249,12 @@ test('cable replacement requires an explicit result and keeps the same hub compa
 
 test('report preserves operator observations, step records and untested fields', () => {
   const s={...comparison(), cable:'no-response'};
-  s.details={location:'Dublin T2', technician:'Operator 1', notes:'Original A cable moved to B.'};
+  s.details={location:'Site A', technician:'Operator 1', notes:'Original A cable moved to B.'};
   s.selftest='uncertain';
   s.log=[{at:'2026-11-17T16:00:00.000Z', label:'Sent RST#C manually'}];
   const text=report(s);
+  assert.match(text, /^MCI 304 LOCKER FIELD GUIDE\n/);
+  assert.match(text, /Location: Site A/);
   assert.match(text, /Technician: Operator 1/);
   assert.match(text, /SELF-TEST\nuncertain/);
   assert.match(text, /After swap: A responded; B no-response/);
@@ -256,6 +265,7 @@ test('report preserves operator observations, step records and untested fields',
   assert.match(text, /recorded by the operator/);
   assert.match(text, /not confirmed component diagnoses/);
   const blank=report(freshSession());
+  assert.match(blank, /Location: Not entered/);
   assert.match(blank, /A: not checked/);
   assert.match(blank, /C \(master\): not checked/);
   assert.match(blank, /SELF-TEST\nNot performed/);

@@ -2,7 +2,7 @@ export const BOARDS = ['A', 'B', 'C', 'D', 'E'];
 export const STAGES = ['Prepare the system', 'Check every board', 'Isolate the fault', 'Save the result'];
 export const STATES = ['responded', 'no-response'];
 export function freshSession() {
-  return {version:1, step:'welcome', details:{location:'Dublin T2', technician:'', notes:''}, connection:'', connectionIssue:false, initial:{}, recheck:{}, selftest:'', affected:'', neighbor:'', swapped:{}, cable:'', acknowledged:false, history:[], log:[], started:new Date().toISOString()};
+  return {version:1, step:'welcome', details:{location:'', technician:'', notes:''}, connection:'', connectionIssue:false, initial:{}, recheck:{}, selftest:'', affected:'', neighbor:'', swapped:{}, cable:'', acknowledged:false, history:[], log:[], started:new Date().toISOString()};
 }
 export function allChecked(results, boards=BOARDS) { return boards.every(b=>STATES.includes(results[b])); }
 export function allResponded(results) { return BOARDS.every(b=>results[b]==='responded'); }
@@ -34,7 +34,7 @@ export function validateStep(s) {
 export function nextStep(s) {
   if(!validateStep(s)) return null;
   if(s.step==='connect'&&s.connection==='unavailable') return 'selftest';
-  const seq={welcome:'power',power:'startup',startup:'connect',connect:'reset',reset:'initial',selftest:'retry',retry:'recheck',select:'connector',connector:'swap'};
+  const seq={welcome:'power',power:'connect',startup:'connect',connect:'reset',reset:'initial',selftest:'retry',retry:'recheck',select:'connector',connector:'swap'};
   if(seq[s.step]) return seq[s.step];
   if(s.step==='initial') return allResponded(s.initial)?'result':'selftest';
   if(s.step==='recheck') return allResponded(s.recheck)||s.recheck.C!=='responded'?'result':'select';
@@ -60,7 +60,7 @@ export function outcome(s) {
 }
 export function report(s) {
   const result=outcome(s), results=r=>BOARDS.map(b=>`  ${b}${b==='C'?' (master)':''}: ${r[b]??'not checked'}`).join('\n');
-  return `DUBLIN LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${new Date().toISOString()}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nUSB COM CONNECTION\n${s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded')}\n${s.connectionIssue?'A connection problem was recorded during this session.\n':''}\nINITIAL ISB CHECK\n${results(s.initial)}\n\nSELF-TEST\n${s.selftest||'Not performed'}\n\nISB CHECK AFTER RST#C\n${results(s.recheck)}\n\nCONNECTION COMPARISON\nOriginal affected board: ${s.affected||'Not selected'}\nAdjacent working slave: ${s.neighbor||'Not selected'}\nAfter swap: ${s.affected||'?'} ${s.swapped[s.affected]||'not checked'}; ${s.neighbor||'?'} ${s.swapped[s.neighbor]||'not checked'}\nKnown working cable on same hub connection: ${s.cable||'Not checked'}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(e=>`${e.at} | ${e.label}`).join('\n')}\n\n${s.mode==='usb'?'USB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator.':'Commands were sent manually in the test application. Results above were recorded by the operator.'} Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s):''}`;
+  return `MCI 304 LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${new Date().toISOString()}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nUSB COM CONNECTION\n${s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded')}\n${s.connectionIssue?'A connection problem was recorded during this session.\n':''}\nINITIAL ISB CHECK\n${results(s.initial)}\n\nSELF-TEST\n${s.selftest||'Not performed'}\n\nISB CHECK AFTER RST#C\n${results(s.recheck)}\n\nCONNECTION COMPARISON\nOriginal affected board: ${s.affected||'Not selected'}\nAdjacent working slave: ${s.neighbor||'Not selected'}\nAfter swap: ${s.affected||'?'} ${s.swapped[s.affected]||'not checked'}; ${s.neighbor||'?'} ${s.swapped[s.neighbor]||'not checked'}\nKnown working cable on same hub connection: ${s.cable||'Not checked'}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(e=>`${e.at} | ${e.label}`).join('\n')}\n\n${s.mode==='usb'?'USB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator.':'Commands were sent manually in the test application. Results above were recorded by the operator.'} Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s):''}`;
 }
 function usbEvidence(s){
  const data=s.usb||{};

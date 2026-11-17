@@ -4,13 +4,23 @@ Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/)
 
 The guide walks through the mains cycle, master reset, five-board ISB checks, physical self-test and connection comparisons. It can monitor raw sensor inputs on one board or all five, and download a report with timestamps and raw USB traffic. Session data stays in that browser until downloaded.
 
+## Guided procedure
+
+Each screen gives the operator one action and a Next button. First, cycle the locker mains supply and wait for startup. The next screen asks the operator to connect the black USB cable and select the locker COM port.
+
+Opening the port does not confirm communication. The guide requires a valid input-status reply from master C. If the connection is not confirmed within 60 seconds, it asks the operator to check the power, cable and other locker applications, then retry or use the physical self-test.
+
+After the first valid reply, the guide watches master C for 60 seconds. A fresh final reply is required before Next becomes available. Failed replies or a disconnected USB port remove the ready status. Selecting Next sends the master reset automatically. After the reset wait, the next screen runs the five-board checks automatically.
+
+For a connection swap or replacement cable, the guide waits for the operator to confirm the physical change before it sends the corresponding checks. Detailed controls and the USB log are under Advanced diagnostics. Monitoring controls become available at the result. The optional location field starts blank.
+
 ## Protocol and limits
 
 The transport uses 9600 baud, 8N1, no flow control, DTR/RTS low, and ASCII commands terminated by CR with 10 ms character spacing. It accepts only `ISB#A` through `ISB#E` and `RST#C`. Reset waits six seconds; an acknowledgement does not establish a CPU reset or slave reset. No lock activation commands are sent.
 
 Valid ISB replies must contain exactly 16 binary inputs and match the requested board. Silent timeouts record no response. USB failures, malformed replies and wrong addresses leave checks incomplete. Input 1 is the rightmost bit; open/closed polarity is not assumed. Multiple changes are observations, not component diagnoses.
 
-This protocol has no transaction IDs. Draining late data reduces stale-reply risk but cannot prove that a very late reply belongs to a later request to the same board. Protocol handling follows the existing tester and supplied legacy firmware; the installed Dublin firmware has not been verified.
+This protocol has no transaction IDs. Draining late data reduces stale-reply risk but cannot prove that a very late reply belongs to a later request to the same board. Protocol handling follows the existing tester and supplied legacy firmware; the installed firmware has not been verified.
 
 ## Development
 
