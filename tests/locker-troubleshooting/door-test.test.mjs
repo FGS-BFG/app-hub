@@ -59,9 +59,10 @@ test('an attempted command alone, or input words alone, cannot mark a bank teste
   }
 });
 
-test('connection setup is explicit for attempted tests, while an all-skipped record can remain unconfirmed',()=>{
+test('routine test reports allow unconfirmed setup and changed connections require a note',()=>{
   const value=attempted();value.setup.connections='not-confirmed';
-  assert.throws(()=>validateDoorTests(value),/setup/);
+  assert.doesNotThrow(()=>validateDoorTests(value));
+  assert.equal(doorTestsComplete(value),true);
   value.setup.connections='changed';assert.throws(()=>validateDoorTests(value),/setup note/);
   value.setup.note='Connections still swapped between A and B.';
   assert.equal(doorTestsComplete(value),true);

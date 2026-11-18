@@ -1,4 +1,4 @@
-import {hasReportData, payloadForDrive} from './report-record.js?v=20261118-click-door';
+import {hasReportData, payloadForDrive} from './report-record.js?v=20261118-door-response';
 import {buildReportPayload, validateSaveResult} from './drive-reports.js';
 import {validateBeforeRestart} from './before-restart.js?v=20261118-before-restart';
 import {validateBoardDetection} from './board-detection.js?v=20261118-detect';

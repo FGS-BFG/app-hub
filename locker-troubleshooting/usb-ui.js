@@ -247,18 +247,15 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
    try{evidence=await transport.pulseDoor(board,door,{durationMs:15000,untilOpen:true,onProgress:progress=>{if(progress.sample)capture(progress.sample);onLockState(progress.phase);}});recordPulse(evidence);}
    catch(error){if(error.evidence)recordPulse({...error.evidence,code:error.code||'OUTPUT',error:error.message});throw error;}
    if(evidence.cancelled)throw Object.assign(Error('The opening check was stopped. Record the physical result before continuing.'),{code:'CANCELLED'});
-   requireContinue();onPhase('Keep the selected door open. Watching its column for 10 seconds…');
-   const deadline=Date.now()+10000;
-   do{const result=await read('open',board);if(result.status!=='responded')break;await delay(150);}while(Date.now()<deadline&&canContinue());
-   requireContinue();onPhase('Checking the other columns for sensor changes…');
-   for(const value of targets.filter(value=>value!==board))await read('open',value);
+   requireContinue();
    observe(`Column ${board}, door ${door}: opening and lock-off commands transmitted. Operator confirmation and raw sensor evidence are separate.`);
   }catch(error){lastError=error.message;observe(`Column ${board}, door ${door}: ${error.message}`);throw error;}
   finally{operation=false;onBusy(false);paint();}
  }
- async function readDoorTestInputs(board,{shouldContinue=()=>true,onSample=()=>{}}={}){
+ async function readDoorTestInputs(board,{shouldContinue=()=>true,onSample=()=>{},onlySelected=false}={}){
   const targets=operationBoards(),master=activeMaster(),mine=beginDoorOperation(board);
-  try{for(const value of [board,...targets.filter(value=>value!==board)]){if(mine!==token||doorStop||document.hidden||!shouldContinue()||targets.join('')!==operationBoards().join('')||master!==activeMaster())throw Error('Closed-input check interrupted.');onSample(await check(value));}}
+  const toRead=onlySelected?[board]:[board,...targets.filter(value=>value!==board)];
+  try{for(const value of toRead){if(mine!==token||doorStop||document.hidden||!shouldContinue()||targets.join('')!==operationBoards().join('')||master!==activeMaster())throw Error('Closed-input check interrupted.');onSample(await check(value));}}
   finally{operation=false;onBusy(false);paint();}
  }
  async function toggleMonitor(){

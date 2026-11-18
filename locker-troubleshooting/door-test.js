@@ -117,8 +117,7 @@ function validateBankTest(entry,label,targets,setup){
   if(entry.status==='testing'&&(!entry.door||!entry.startedAt))invalid(label+' in progress needs its door and start time.');
   if(entry.status==='tested'){
     if(!entry.door||!entry.startedAt||!entry.completedAt||!entry.command.open||!entry.operator.opened||!entry.operator.closed)invalid(label+' tested status needs an attempted command, selected door, times and both operator answers.');
-    if(!setup||!['original','changed'].includes(setup.connections))invalid(label+' tested status needs the connection setup observation.');
-    if(setup.connections==='changed'&&!setup.note.trim())invalid(label+' tested with changed connections needs a setup note.');
+    if(setup?.connections==='changed'&&!setup.note.trim())invalid(label+' tested with changed connections needs a setup note.');
   }
   if(entry.status==='skipped'&&(!entry.skipReason.trim()||!entry.completedAt))invalid(label+' skipped status needs its reason and completion time.');
 }

@@ -123,19 +123,18 @@ test('selected-column or master baseline failure prevents any opening pulse',asy
   }
 });
 
-test('one explicit attempt pulses only the chosen bank and door and retains pulse-time samples',async()=>{
+test('the opening stage resolves at lock-off without a second watch or extra scans',async()=>{
   const run=await setup(),samples=[],commands=[];
   const pending=run.panel.openDoorTest('D',11,{onSample:(phase,result)=>samples.push({phase,result:clone(result)}),onCommand:value=>commands.push(clone(value))});
-  await run.finish(pending);
+  await pending;
   assert.equal(run.calls.pulses.length,1);
   assert.equal(run.calls.pulses[0].board,'D');assert.equal(run.calls.pulses[0].door,11);
   assert.equal(run.calls.pulses[0].options.durationMs,15000);
   assert.equal(run.calls.pulses[0].options.untilOpen,true);
-  assert.deepEqual(run.calls.queries.slice(0,6),['D','A','B','C','E','D']);
+  assert.deepEqual(run.calls.queries,['D','A','B','C','E','D']);
   assert.equal(commands.length,1);
   assert.ok(samples.some(sample=>sample.phase==='open'&&sample.result.board==='D'&&sample.result.bits==='0000000000000001'));
   assert.equal(samples.filter(sample=>sample.phase==='baseline').length,6);
-  assert.deepEqual(run.calls.queries.slice(-4),['A','B','C','E']);
   assert.equal(run.panel.busy,false);
 });
 
@@ -177,16 +176,6 @@ test('Stop and a hidden page cancel a held pulse and all remaining reads without
   }
 });
 
-test('hiding during the sensor watch prevents remaining cross-bank checks',async()=>{
-  const run=await setup();
-  const pending=run.panel.openDoorTest('C',8),rejected=assert.rejects(pending,error=>error.code==='CANCELLED');
-  await flush();assert.equal(run.calls.pulses.length,1);
-  const before=run.calls.queries.length;assert.ok(before>=7);
-  run.hide();await run.clock.advance(1000);await rejected;
-  assert.equal(run.calls.queries.length,before);
-  assert.equal(run.calls.pulses.length,1);assert.equal(run.panel.busy,false);
-});
-
 test('closed-input capture reads each bank but never sends an opening pulse',async()=>{
   const run=await setup(),samples=[];
   await run.panel.readDoorTestInputs('B',{onSample:result=>samples.push(clone(result))});
@@ -215,8 +204,7 @@ for(const[capacity,targets,chosen,master]of [['32',['A','B'],'A','B'],['64',['A'
       onCommand:value=>commands.push(clone(value)),
     });
     await run.finish(pending);
-    assert.deepEqual(run.calls.queries.slice(firstQuery,firstQuery+targets.length+1),[chosen,...targets.filter(bank=>bank!==chosen),chosen]);
-    assert.deepEqual(run.calls.queries.slice(-(targets.length-1)),targets.filter(bank=>bank!==chosen));
+    assert.deepEqual(run.calls.queries.slice(firstQuery),[chosen,...targets.filter(bank=>bank!==chosen),chosen]);
     assert.equal(samples.filter(sample=>sample.phase==='baseline').length,targets.length+1);
     assert.ok(samples.some(sample=>sample.phase==='open'&&sample.result.board===chosen&&sample.result.bits==='0000000000000001'),'pulse-time input evidence is retained');
     assert.ok(samples.every(sample=>targets.includes(sample.result.board)));
@@ -258,14 +246,15 @@ for(const[capacity,targets,chosen,master]of [['32',['A','B'],'A','B'],['64',['A'
   });
 }
 
-test('changing the active layout during the sensor watch cancels remaining reads without another pulse',async()=>{
+test('changing the active layout during release ends the attempt without another pulse',async()=>{
   let targets=['A','B','C','D'],master='C';
-  const run=await setup({getBoards:()=>targets,getMaster:()=>master});
+  const held=deferred();
+  const run=await setup({getBoards:()=>targets,getMaster:()=>master,pulse:()=>held.promise});
   const pending=run.panel.openDoorTest('B',4),rejected=assert.rejects(pending,error=>error.code==='CANCELLED');
-  await flush();assert.equal(run.calls.pulses.length,1);assert.ok(run.calls.queries.length>=6);
+  await flush();assert.equal(run.calls.pulses.length,1);assert.equal(run.calls.queries.length,5);
   const before=run.calls.queries.length;
   targets=['A','B'];master='B';run.panel.refreshLayout();
-  await run.clock.advance(11000);await rejected;
+  held.resolve(run.evidence('B'));await rejected;
   assert.equal(run.calls.queries.length,before,'no further old-layout or cross-column reads run');
   assert.equal(run.calls.pulses.length,1);assert.equal(run.panel.busy,false);
   await run.clock.advance(60000);assert.equal(run.calls.pulses.length,1);

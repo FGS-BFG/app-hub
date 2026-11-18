@@ -1,14 +1,14 @@
-import {BEFORE_RESTART_COMMUNICATION,BOARD_CONFIGURATIONS,LOCKER_CAPACITIES,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-click-door';
+import {BEFORE_RESTART_COMMUNICATION,BOARD_CONFIGURATIONS,LOCKER_CAPACITIES,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-door-response';
 import {detectedSelection} from './board-detection.js?v=20261118-detect';
-import {mountUsbPanel} from './usb-ui.js?v=20261118-click-door';
-import {createDoorGuide} from './door-ui.js?v=20261118-connection-setup';
-import {freshDoorTests,getDoorTargets,getDoorMaster,hasDoorTestData,doorTestSummary} from './door-test.js?v=20261118-click-door';
+import {mountUsbPanel} from './usb-ui.js?v=20261118-door-response';
+import {createDoorGuide} from './door-ui.js?v=20261118-door-response';
+import {freshDoorTests,getDoorTargets,getDoorMaster,hasDoorTestData,doorTestSummary} from './door-test.js?v=20261118-door-response';
 import {boardsFor,masterFor,layoutForCapacity} from './layouts.js?v=20261118-master';
 import {GuidedConnection,shouldProceed} from './guided-connection.js?v=20261118-detect';
-import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-click-door';
+import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-door-response';
 import {DriveReportClient,buildReportPayload,validateSaveResult} from './drive-reports.js';
 import {FIELD_REPORTS} from './drive-config.js';
-import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-click-door';
+import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-door-response';
 
 const drive=new DriveReportClient({endpoint:FIELD_REPORTS.endpoint});
 let checksPaused=false;
@@ -415,7 +415,7 @@ $('#confirm-restart').addEventListener('click',()=>{if(!ioIdle()||['saving','cha
 s.mode='usb';
 usb=mountUsbPanel($('#usb-root'),{saved:s.usb,getBoards:()=>layoutReady()?activeBoards():[],getMaster:activeMaster,onSave:data=>{if(reportMode!=='live')return;s.usb=data;save();},onConnection:state=>{if(reportMode!=='live'||checksPaused){refreshReportControls();return;}resetComplete=-1;if(state.connected)s.connection='connected';if(state.error)s.connectionIssue=true;if(!state.connected){const field={initial:'initial',recheck:'recheck',swap:'swapped'}[s.step];if(field)s[field]={};if(s.step==='cable')s.cable='';}else attempted=-1;if(connection&&s.step==='connect'&&!selectedBoard())connection.notifyConnection(state.connected);if(usb){save();render();queueMicrotask(maybeRunStep);}},onBusy:refreshControls});
 function guidedChanged(){if(reportMode!=='live'||checksPaused||selectedBoard()||s.step!=='connect'||!usb)return;rememberDiscovery();if(snapshot().phase==='attention')advancePending=false;render();if(advancePending&&shouldProceed(snapshot(),activeMaster())&&!usb.busy)queueMicrotask(()=>{if(reportMode==='live'&&!checksPaused&&s.step==='connect'&&advancePending&&shouldProceed(snapshot(),activeMaster())&&!usb.busy){advancePending=false;next();}});}
-doorGuide=createDoorGuide({document,getState:()=>s.doorTests,getBoards:testBoards,getMaster:testMaster,usb,isActive:()=>reportMode==='live'&&s.step==='doors'&&!checksPaused&&layoutReady(),onChange:()=>{save();refreshControls();},onBusy:refreshControls,onEvent:record});
+doorGuide=createDoorGuide({document,getState:()=>s.doorTests,getBoards:testBoards,getMaster:testMaster,usb,cableComparison:()=>s.history.some(step=>step==='swap'||step==='cable'),isActive:()=>reportMode==='live'&&s.step==='doors'&&!checksPaused&&layoutReady(),onChange:()=>{save();refreshControls();},onBusy:refreshControls,onEvent:record});
 connection=new GuidedConnection({isConnected:()=>usb.connected,getMaster:activeMaster,probe:master=>usb.check(master),discover:()=>usb.discoverBoards(),onStopDiscovery:()=>usb.stopDiscovery(),onChange:guidedChanged,onEvent:event=>record('Guided connection: '+event.message)});
 if(reportMode==='live')save();setContextPhoto();render();if(reportMode==='live')enterStep();
 // Back/forward navigation can revive an old document without running startup.

@@ -1,4 +1,4 @@
-import {freshDoorTests,getDoorTargets,getDoorMaster,doorTestsComplete,formatDoorTests} from './door-test.js?v=20261118-click-door';
+import {freshDoorTests,getDoorTargets,getDoorMaster,doorTestsComplete,formatDoorTests} from './door-test.js?v=20261118-door-response';
 import {ALL_BOARDS,LAYOUTS,boardsFor,masterFor} from './layouts.js?v=20261118-master';
 import {freshBoardDetection,validateBoardDetection,detectedSelection,formatBoardDetection} from './board-detection.js?v=20261118-detect';
 

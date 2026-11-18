@@ -60,11 +60,11 @@ This directory owns the GitHub Pages copy. The earlier private Sites version is 
 
 During a release, the diagram shows red for sensor-open inputs and green for the selected active release command. Red takes precedence when the door opens. Green clears after lock-off; uncertain lock-off uses amber. Grey is not a physical lock confirmation. Reports retain the release limit, selected input rule and relock reason in the step record.
 
-After recording the connection setup, click a door in the diagram to start its release test. The app first reads the sensors and identifies any open doors on the selected column. Close the named doors before trying again.
+Click a closed door in the diagram to start its release test. The app first checks the sensors and names any open doors on the selected column. The cable setup question appears after a cable comparison or when a door test reports a problem.
 
 The physical self-test screen includes **Need help finding the red button?**, with close-ups for both flat Input Sense ribbons and individual sensor wires. It defaults to the recorded setup and lets the operator switch the reference or enlarge the full-board photo. These help controls do not start the timer, send commands, change the recorded setup or choose an answer. The instructions identify the configured master, including B for 32 bays.
 
-Test at least one door on each fitted column. Answer whether the selected door opened. Close it, then answer whether it closed. The app reads the inputs when you record the closing answer. The report retains each result if you test more doors on a column.
+Test at least one door on each fitted column. The opening question appears as soon as lock-off finishes. After you answer, close the door and confirm closure when the sensor reports it. If the sensor does not update, use the manual confirmation option. The report retains each result if you test more doors on a column.
 
 Slave cable comparisons exclude the configured master. The 80-bay layout permits A with B and D with E; the 64-bay layout permits A with B; the 32-bay layout has no adjacent slave pair. A failed column without an adjacent working slave is recorded as unresolved and is not compared by swapping the master connection. Older targetless reports retain their historical A–E meaning, and frozen retries keep their original text. Actual older readings outside the current layout remain identified as historical evidence. The downloadable Word procedure describes the original 80-bay layout.
 
