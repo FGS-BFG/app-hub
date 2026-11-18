@@ -1,4 +1,49 @@
 import test from 'node:test';
+test('the door diagram follows idle sensor changes and stops when the operator leaves',async()=>{
+ let bits='0'.repeat(16);
+ const app=boot(new MemoryStorage(),{usbConnected:true,liveInput:()=>bits});
+ app.enterDoorStep('32');
+ await app.runNextTimer();
+ const light=app.document.querySelector('[data-door-window="1"]');
+ const selection=app.document.querySelector('[data-door-number="1"]');
+ assert.equal(light.classList.contains('open'),false);
+ bits='0'.repeat(15)+'1';
+ await app.runNextTimer();
+ assert.equal(light.classList.contains('open'),true);
+ assert.match(selection.getAttribute('aria-label'),/sensor open/);
+ assert.equal(app.document.querySelector('[data-door-number="1"]'),selection,'background reads leave controls in place');
+ bits='0'.repeat(16);
+ await app.runNextTimer();
+ assert.equal(light.classList.contains('open'),false);
+ app.selectData('data-door-bank','B');
+ await app.runNextTimer();
+ assert.deepEqual(app.liveTargets,['A','A','A','B']);
+ assert.equal(app.state().doorTests.banks.A.samples.length,0);
+ app.click('back');
+ await app.runNextTimer();
+ assert.deepEqual(app.liveTargets,['A','A','A','B']);
+ assert.equal(app.calls.doorOpen,0);
+});
+
+test('an opening action waits for a previous preview read and resumes the live diagram afterwards',async()=>{
+ let resolvePreview;
+ let bits='0'.repeat(16);
+ const app=boot(new MemoryStorage(),{usbConnected:true,liveInput:()=>resolvePreview?bits:new Promise(resolve=>{resolvePreview=resolve;})});
+ app.enterDoorStep('32');app.selectData('data-door-setup','original');app.selectData('data-door-number','3');app.check('door-ready');
+ await app.runNextTimer();
+ app.click('door-open');
+ assert.equal(app.calls.doorOpen,0);
+ resolvePreview('0'.repeat(15)+'1');await app.settle();
+ assert.equal(app.calls.doorOpen,1);
+ await app.runNextTimer();
+ assert.equal(app.document.querySelector('[data-door-window="1"]').classList.contains('open'),false);
+ app.selectData('data-door-answer','opened:yes');app.click('door-read-closed');await app.settle();
+ app.selectData('data-door-answer','closed:yes');app.click('door-complete');
+ app.selectData('data-door-bank','A');
+ bits='0'.repeat(15)+'1';await app.runNextTimer();
+ assert.equal(app.document.querySelector('[data-door-window="1"]').classList.contains('open'),true,'completed column still shows live state');
+ assert.equal(app.calls.doorOpen,1);
+});
 test('live windows distinguish sensor-open red from the selected active release and clear green after lock-off',async()=>{
  const app=boot(new MemoryStorage(),{usbConnected:true,holdDoorOpen:true});
  app.enterDoorStep('32');app.selectData('data-door-setup','original');app.selectData('data-door-number','3');app.check('door-ready');
@@ -104,10 +149,10 @@ class FakeDocument{
   createElement(tag){return new FakeElement(this,tag);}
 }
 
-function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unexpected automatic Drive save.',holdDoorOpen=false,doorFailure='',doorPreflightFailure='',doorOffFailure=false}={}){
+function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unexpected automatic Drive save.',holdDoorOpen=false,doorFailure='',doorPreflightFailure='',doorOffFailure=false,liveInput}={}){
   const document=new FakeDocument(html),microtasks=[],timers=new Map(),windowListeners=new Map();
   const calls={uuid:0,usbCheck:0,usbScan:0,usbReset:0,usbConnect:0,usbDiscover:0,usbStopDiscovery:0,usbAdopt:0,doorOpen:0,doorRead:0,guidedStart:0,driveSave:0,library:0,reloads:0};
-  const drivePayloads=[],doorTargets=[],scanTargets=[],queryTargets=[],resetTargets=[],adoptedBoards=[];
+  const drivePayloads=[],doorTargets=[],scanTargets=[],queryTargets=[],resetTargets=[],adoptedBoards=[],liveTargets=[];
   let timerId=0,releaseDoor,mockUsb,appNow=Date.now();
   const usbData={boards:{},lastBits:{},events:[],checks:[],observations:[],connected:usbConnected};
   const window={
@@ -136,6 +181,7 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
       snapshot:()=>clone(usbData),setControlsEnabled(){},stopMonitor(){},clear(){singleBoardTarget=null;lastDiscoveryResults=[];},showError(){},
       async disconnect(){usb.connected=false;usbData.connected=false;onConnection({connected:false});},
       async check(board=getMaster()){requireTarget(board);queryTargets.push(board);calls.usbCheck++;return{board,status:'responded',bits:'0'.repeat(16)};},
+      ...(liveInput?{readLiveDoorInputs(board){requireTarget(board);liveTargets.push(board);return liveInput(board);}}:{}),
       async scan(boards=scopedBoards(),onResult=()=>{}){calls.usbScan++;scanTargets.push([...boards]);for(const board of boards){requireTarget(board);await onResult({board,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:00.000Z'});}},
       async reset(){if(singleBoardTarget)throw Object.assign(Error('Master reset is unavailable in a single-board check.'),{code:'SCOPE'});calls.usbReset++;resetTargets.push(getMaster());},async connect(){calls.usbConnect++;},refreshLayout(){},
       async discoverBoards(){calls.usbDiscover++;return clone(lastDiscoveryResults);},
@@ -170,7 +216,7 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     // Production ESM modules share a realm. Normalize the VM/host boundary here
     // so its plain step-log objects reach the real validator as plain objects.
     createReportRecord:(session,options)=>records.createReportRecord(structuredClone(session),options),
-    DriveReportClient,GuidedConnection,mountUsbPanel,createDoorGuide,shouldProceed:(snapshot,master)=>snapshot.phase==='ready'&&snapshot.masterBoard===master,
+    DriveReportClient,GuidedConnection,mountUsbPanel,createDoorGuide:options=>createDoorGuide({...options,setTimer,clearTimer:id=>timers.delete(id)}),shouldProceed:(snapshot,master)=>snapshot.phase==='ready'&&snapshot.masterBoard===master,
     FIELD_REPORTS:{endpoint:'https://script.google.com/macros/s/TEST/exec'},
     document,window,localStorage:storage,crypto:{randomUUID(){calls.uuid++;return uuid();}},
     navigator:{clipboard:{writeText:async()=>{}}},structuredClone,Date:AppDate,
@@ -181,13 +227,14 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   new vm.Script(appSource,{filename:appUrl.pathname}).runInContext(context);flush();
   const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,beforeRestart:s.beforeRestart,boardDetection:s.boardDetection,initial:s.initial,recheck:s.recheck,doorTests:s.doorTests,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
   const earlierPageFixture="s.beforeRestart={communication:'unsure',unresponsiveBoards:[],notes:'Fixture begins after the earlier observation page.',recordedAt:s.started};";
-  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,scanTargets,queryTargets,resetTargets,adoptedBoards,
+  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,scanTargets,queryTargets,resetTargets,adoptedBoards,liveTargets,
     enterBeforeRestart(capacity='80',setup='flat-input-sense',{connected=false}={}){this.chooseCapacity(capacity);this.click('next');this.chooseConfiguration(setup);if(connected){mockUsb.connected=true;usbData.connected=true;}this.click('next');assert.equal(state().step,'before-restart');},
     enterDoorStep(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('doors','Test fixture completed communication checks')",context);flush();},
     enterInitialCheck(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('initial','Test fixture completed connection check')",context);flush();},
     enterConnection(capacity='32'){context.fixtureCapacity=capacity;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('connect','Test fixture completed power cycle')",context);flush();},
     enterSelfTest(capacity='80',setup='flat-input-sense'){context.fixtureCapacity=capacity;context.fixtureSetup=setup;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.details.boardConfiguration=fixtureSetup;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('selftest','Test fixture requested physical self-test')",context);flush();},
     timerCount(){return timers.size;},
+    async runNextTimer(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}await this.settle();},
     advanceAppTime(ms){appNow+=ms;},
     finding:()=>JSON.parse(vm.runInContext('JSON.stringify(outcome(s))',context)),
     readyConnection(master){context.fixtureMaster=master;vm.runInContext("connection.current={phase:'ready',masterBoard:fixtureMaster,connected:true,verifiedAt:1};render()",context);flush();},

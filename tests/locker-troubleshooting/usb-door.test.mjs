@@ -1,4 +1,17 @@
 import test from 'node:test';
+test('live diagram reads share the USB lock and leave recorded test evidence alone',async()=>{
+ const response=deferred();
+ const run=await setup({getBoards:()=>['A','B'],getMaster:()=> 'B',query:()=>response.promise});
+ const before=run.panel.snapshot();
+ const preview=run.panel.readLiveDoorInputs('A');
+ assert.equal(run.panel.busy,true);
+ await assert.rejects(run.panel.check('B'),error=>error.code==='BUSY');
+ response.resolve(run.reading('A','0'.repeat(15)+'1'));
+ assert.equal(await preview,'0'.repeat(15)+'1');
+ assert.deepEqual(run.panel.snapshot(),before);
+ await assert.rejects(run.panel.readLiveDoorInputs('C'),error=>error.code==='LAYOUT');
+ assert.deepEqual(run.calls.queries,['A']);
+});
 test('release progress reaches the live diagram without duplicating its input sample',async()=>{
  const states=[],samples=[];
  const run=await setup({pulse:(board,door,make)=>{

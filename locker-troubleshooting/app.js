@@ -1,7 +1,7 @@
 import {BEFORE_RESTART_COMMUNICATION,BOARD_CONFIGURATIONS,LOCKER_CAPACITIES,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-detect';
 import {detectedSelection} from './board-detection.js?v=20261118-detect';
-import {mountUsbPanel} from './usb-ui.js?v=20261118-release15';
-import {createDoorGuide} from './door-ui.js?v=20261118-release15';
+import {mountUsbPanel} from './usb-ui.js?v=20261118-live-doors';
+import {createDoorGuide} from './door-ui.js?v=20261118-live-doors';
 import {freshDoorTests,getDoorTargets,getDoorMaster,hasDoorTestData,doorTestSummary} from './door-test.js?v=20261118-detect';
 import {boardsFor,masterFor,layoutForCapacity} from './layouts.js?v=20261118-master';
 import {GuidedConnection,shouldProceed} from './guided-connection.js?v=20261118-detect';
@@ -178,6 +178,7 @@ function render(focus=false){
  $('#progress').innerHTML=STAGES.map((text,i)=>({text:stageTitle(i),i})).filter(item=>!selectedBoard()||item.i!==2).map(({text,i},position)=>`<li class="${i===stage?'active':i<stage?'done':''}" ${i===stage?'aria-current="step"':''}><span class="progress-num">${i<stage?'✓':position+1}</span><div>${text}<small>${['Board setup, current fault, power and USB','Automatic board replies','Follow the next physical test','One door on '+(selectedBoard()||boardNames()),'Save the evidence to Drive'][i]}</small></div></li>`).join('');
  $('#step').innerHTML=`<div class="eyebrow"><span class="mini-dot"></span>${stage===4?'YOUR RESULT':stageTitle(stage)}</div>${content()}`;
  if(s.step==='doors')doorGuide?.render($('#door-guide'));
+ else doorGuide?.pauseLive();
  usb?.setControlsEnabled(s.step==='result'&&!checksPaused&&layoutReady());refreshReportControls();$('#advanced-diagnostics').hidden=false;
  $('#storage-label').textContent=cacheError?'Browser progress could not be saved':'Draft kept on this device';
  if(checksPaused&&s.step!=='connect')$('#step').insertAdjacentHTML('afterbegin','<div class="note"><p>Automatic locker checks are paused.</p><button class="secondary" id="resume-report">Resume this report</button></div>');

@@ -9,6 +9,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
  let transport=null,connecting=false,disconnecting=false,disconnectTask=null,operation=false,monitoring=false,monitorToken=0,token=0,intentionalClose=false,doorStop=false;
  let connectedBoards=[];
  let discovery=null,lastDiscovery=null,singleBoardTarget=null;
+ let liveDoorRead=null;
  let data={boards:{},events:[],observations:[],checks:[],...saved};
  for(const key of ['events','observations','checks'])if(!Array.isArray(data[key]))data[key]=[];
  if(!data.boards||typeof data.boards!=='object')data.boards={};
@@ -25,7 +26,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
  function requireCurrentMaster(){const master=activeMaster();if(!master||transport?.masterBoard!==master||connectedBoards.join('')!==activeBoards().join(''))throw Object.assign(Error('The USB connection does not match the selected master and columns. Reconnect using the correct locker layout.'),{code:'LAYOUT'});return master;}
  function refreshLayout(){const select=$('#usb-monitor-board'),previous=select.value,targets=operationBoards();select.innerHTML=`<option value="all">${singleBoardTarget?'Selected board only':'All installed boards'}</option>`+targets.map(board=>`<option value="${board}">Board ${board}</option>`).join('');select.value=targets.includes(previous)?previous:'all';paint();}
  function persist(){onSave(structuredClone(data));}
- function event(e){data.events.push({...e,...(discovery?{stage:'discovery'}:{}),at:e.at||stamp()});data.events=data.events.slice(-2000);if(e.type==='error'||e.type==='warning'){data.observations.push({at:e.at||stamp(),message:e.message||e.raw||e.code||'USB message'});data.observations=data.observations.slice(-120);}persist();paintLog();}
+ function event(e){if(liveDoorRead&&transport?.connected)return;data.events.push({...e,...(discovery?{stage:'discovery'}:{}),at:e.at||stamp()});data.events=data.events.slice(-2000);if(e.type==='error'||e.type==='warning'){data.observations.push({at:e.at||stamp(),message:e.message||e.raw||e.code||'USB message'});data.observations=data.observations.slice(-120);}persist();paintLog();}
  function observe(text){data.observations.push({at:stamp(),message:text});data.observations=data.observations.slice(-120);persist();paintLog();}
  function paintLog(){
   $('#usb-log').textContent=data.events.slice(-70).map(e=>`${e.at} ${e.type.toUpperCase()} ${e.command||''} ${e.raw!==undefined?JSON.stringify(e.raw):e.message||e.code||''}`).join('\n')||'No USB traffic recorded.';
@@ -44,7 +45,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   $('#usb-settings').textContent=`9600 baud · 8N1 · ${singleBoardTarget?`single board ${singleBoardTarget}; locker master ${activeMaster()||'not selected'} not confirmed`:`master ${activeMaster()||'not selected'}`} · USB evidence is included when you save a report`;
   $('#usb-board-list').innerHTML=operationBoards().map(b=>{const r=data.boards[b];return `<div class="usb-board"><div class="usb-board-heading"><strong>${b}${!singleBoardTarget&&b===activeMaster()?' · master':''}</strong><span>${r?esc(r.status==='responded'?'Reply received':r.status==='no-response'?'Reply timed out':'Check incomplete'):'Not checked'}</span><small>${r?esc(r.at.slice(11,19))+' · '+(r.elapsedMs??'—')+' ms':''}</small></div><div class="sensor-bits" aria-label="Board ${b} raw sensor inputs">${Array.from({length:16},(_,i)=>{const value=r?.status==='responded'?r.bits?.[15-i]:undefined;return `<span class="sensor-bit ${value==='1'?'one':value==='0'?'zero':''}" title="Input ${i+1}: ${value??'not read'}"><small>${i+1}</small><b>${value??'–'}</b></span>`;}).join('')}</div>${r?.error?`<p class="usb-board-error">${esc(r.error)}</p>`:''}</div>`;}).join('');paintLog();
  }
- function connectionChanged(state){data.connected=state.connected;persist();const error=intentionalClose?null:state.error;if(state.connected!==lastConnected||error){lastConnected=state.connected;onConnection({connected:state.connected,error});}onBusy(state.busy);if(error){lastError=error.message||'USB connection lost.';message='Reconnect the USB port before continuing. Incomplete checks are not board failures.';stopMonitor();}paint();}
+ function connectionChanged(state){if(liveDoorRead&&state.connected===lastConnected&&!state.error)return;data.connected=state.connected;persist();const error=intentionalClose?null:state.error;if(state.connected!==lastConnected||error){lastConnected=state.connected;onConnection({connected:state.connected,error});}onBusy(state.busy);if(error){lastError=error.message||'USB connection lost.';message='Reconnect the USB port before continuing. Incomplete checks are not board failures.';stopMonitor();}paint();}
  async function connect(){
   if(connecting||disconnecting||operation||monitoring||transport?.connected||transport?.busy)return;
   if(!supported){lastError='USB access requires desktop Chrome or Edge over HTTPS or localhost.';paint();return;}
@@ -165,6 +166,29 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   try{return await check(board);}
   finally{operation=false;onBusy(false);paint();}
  }
+ // Preview readings use the same serial lock, without filling the report log.
+ async function readLiveDoorInputs(board){
+  if(document.hidden||operation||monitoring||connecting||disconnecting||transport?.busy||!transport?.connected)return null;
+  requireBoard(board);
+  requireCurrentMaster();
+  const source=transport;
+  operation=true;
+  liveDoorRead=source;
+  onBusy(true);
+  try{
+   const reply=await source.query(board);
+   if(source!==transport||!source.connected||document.hidden)return null;
+   requireBoard(board);
+   requireCurrentMaster();
+   return reply.board===board&&/^[01]{16}$/.test(reply.bits)?reply.bits:null;
+  }catch{
+   return null;
+  }finally{
+   liveDoorRead=null;
+   operation=false;
+   onBusy(false);
+  }
+ }
  async function scan(boards=operationBoards(),onResult=()=>{}){
   if(!Array.isArray(boards)||!boards.length||new Set(boards).size!==boards.length)throw Error('Choose the installed boards for this check.');
   boards.forEach(requireBoard);boards=[...boards];
@@ -245,5 +269,5 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
  document.addEventListener('visibilitychange',()=>{if(document.hidden){stopMonitor();stopDoorTest();stopDiscovery();}});
  globalThis.addEventListener?.('pagehide',()=>{stopDoorTest();stopDiscovery();});
  persist();refreshLayout();
- return {supported,get connected(){return!!transport?.connected;},get busy(){return connecting||disconnecting||operation||monitoring||!!transport?.busy;},get activationBlocked(){return!!transport?.activationBlocked;},get activationBlockReason(){return transport?.activationBlockReason||'';},get monitoring(){return monitoring;},get singleBoardTarget(){return singleBoardTarget;},connect,disconnect,discoverBoards,stopDiscovery,adoptSingleBoard,check:publicCheck,scan,reset,refreshLayout,openDoorTest,readDoorTestInputs,stopDoorTest,stopMonitor,showError,setControlsEnabled(value){controlsEnabled=!!value;paint();},snapshot:()=>structuredClone(data),clear};
+ return {supported,get connected(){return!!transport?.connected;},get busy(){return connecting||disconnecting||operation||monitoring||!!transport?.busy;},get activationBlocked(){return!!transport?.activationBlocked;},get activationBlockReason(){return transport?.activationBlockReason||'';},get monitoring(){return monitoring;},get singleBoardTarget(){return singleBoardTarget;},connect,disconnect,discoverBoards,stopDiscovery,adoptSingleBoard,check:publicCheck,readLiveDoorInputs,scan,reset,refreshLayout,openDoorTest,readDoorTestInputs,stopDoorTest,stopMonitor,showError,setControlsEnabled(value){controlsEnabled=!!value;paint();},snapshot:()=>structuredClone(data),clear};
 }
