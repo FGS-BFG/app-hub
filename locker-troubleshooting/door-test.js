@@ -20,7 +20,11 @@ function validateTargets(targets,label='targets'){
     new Set(targets).size!==targets.length)invalid(label+' must be unique bank letters A–E, or an empty unconfirmed layout.');
   return targets;
 }
-function validateMaster(master,targets,label='master'){
+function validateMaster(master,targets,label='master',scope='locker'){
+  if(scope==='board'){
+    if(master!==null||targets.length!==1)invalid(label+' must be null for exactly one explicitly board-scoped target.');
+    return master;
+  }
   if(master===null&&!targets.length)return master;
   if(!BANKS.includes(master)||targets.length&&!targets.includes(master))invalid(label+' must be a configured bank in the recorded columns.');
   return master;
@@ -35,12 +39,18 @@ export function getDoorTargets(value){
 
 // Missing master is historical C. Never infer a new master from the target list.
 export function getDoorMaster(value){
-  return validateMaster(value&&own(value,'master')?value.master:'C',getDoorTargets(value));
+  return validateMaster(value&&own(value,'master')?value.master:'C',getDoorTargets(value),'master',getDoorScope(value));
 }
 
-export function freshDoorTests(targets=BANKS,master='C'){
-  validateTargets(targets);validateMaster(master,targets);
-  return{version:1,targets:[...targets],master,setup:{connections:'not-confirmed',note:''},
+export function getDoorScope(value){
+  const scope=value&&own(value,'scope')?value.scope:'locker';
+  if(!['locker','board'].includes(scope))invalid('scope must be locker or board.');
+  return scope;
+}
+
+export function freshDoorTests(targets=BANKS,master='C',{scope='locker'}={}){
+  validateTargets(targets);getDoorScope({scope});validateMaster(master,targets,'master',scope);
+  return{version:1,...(scope==='board'?{scope}:{}),targets:[...targets],master,setup:{connections:'not-confirmed',note:''},
     banks:Object.fromEntries(BANKS.map(bank=>[bank,freshBankDoorTest()]))};
 }
 
@@ -85,13 +95,13 @@ function validateSample(sample,label,expectedBoard,{phase=false,targets=BANKS}={
 // A missing section is a supported older draft. It is never a completed new test.
 export function validateDoorTests(value,{allowMissing=true,expectedTargets,expectedMaster}={}){
   if(value===undefined&&allowMissing)return value;
-  shape(value,['version','targets','master','setup','banks'],'section');
+  shape(value,['version','scope','targets','master','setup','banks'],'section');
   if(value.version!==1)invalid('unsupported version.');
   const targets=getDoorTargets(value);
   const master=getDoorMaster(value);
   if(expectedTargets!==undefined&&!sameTargets(targets,validateTargets(expectedTargets,'expected targets')))invalid('recorded targets do not match the current layout.');
   if(expectedMaster!==undefined){
-    validateMaster(expectedMaster,expectedTargets??targets,'expected master');
+    validateMaster(expectedMaster,expectedTargets??targets,'expected master',expectedMaster===null&&(expectedTargets??targets).length===1?'board':'locker');
     if(master!==expectedMaster)invalid('recorded master does not match the current layout.');
   }
   if(value.setup!==undefined){
@@ -190,15 +200,16 @@ function bankSummary(entry,targets){
 }
 
 export function doorTestSummary(value,expectedTargets,expectedMaster){
-  let data,targets=[],master=null;
+  let data,targets=[],master=null,scope='locker';
   try{
-    data=value??freshDoorTests(expectedTargets===undefined?BANKS:expectedTargets,expectedMaster===undefined?'C':expectedMaster);
-    targets=getDoorTargets(data);master=getDoorMaster(data);validateDoorTests(data);
+    const fallbackTargets=expectedTargets===undefined?BANKS:expectedTargets;
+    data=value??freshDoorTests(fallbackTargets,expectedMaster===undefined?'C':expectedMaster,{scope:expectedMaster===null&&fallbackTargets.length===1?'board':'locker'});
+    targets=getDoorTargets(data);master=getDoorMaster(data);scope=getDoorScope(data);validateDoorTests(data);
     if(expectedTargets!==undefined)validateTargets(expectedTargets,'expected targets');
-    if(expectedMaster!==undefined)validateMaster(expectedMaster,expectedTargets??targets,'expected master');
-  }catch(error){return{complete:false,tested:0,skipped:0,pending:targets.length,targets,master,banks:{},error:error.message};}
+    if(expectedMaster!==undefined)validateMaster(expectedMaster,expectedTargets??targets,'expected master',expectedMaster===null&&(expectedTargets??targets).length===1?'board':'locker');
+  }catch(error){return{complete:false,tested:0,skipped:0,pending:targets.length,targets,master,scope,banks:{},error:error.message};}
   const entries=targets.map(bank=>data.banks[bank]);
-  return{complete:doorTestsComplete(value,expectedTargets,expectedMaster),targets,master,layoutConfirmed:targets.length>0,
+  return{complete:doorTestsComplete(value,expectedTargets,expectedMaster),targets,master,scope,layoutConfirmed:scope==='locker'&&targets.length>0,
     targetsMatch:expectedTargets===undefined||sameTargets(targets,expectedTargets),
     masterMatches:expectedMaster===undefined||master===expectedMaster,
     tested:entries.filter(entry=>entry.status==='tested').length,
@@ -221,7 +232,7 @@ export function formatDoorTests(value,expectedTargets,expectedMaster){
   if(summary.error)return header+'\n'+summary.error+'\nNo completed door test is inferred.';
   const targets=summary.targets;
   const lines=[header,targets.length?`Recorded columns: ${targets.join(', ')}.`:'Layout unconfirmed. No columns are assigned; door tests are incomplete.',
-    'Recorded master: '+(summary.master||'Not confirmed')+'.',
+    ...(summary.scope==='board'?['Scope: Explicit selected-board test only; other locker columns are not assessed.','Recorded master: None assigned in this board-only scope.']:['Recorded master: '+(summary.master||'Not confirmed')+'.']),
     ...(targets.length?[`Recorded attempts: ${summary.tested} tested; ${summary.skipped} skipped; ${summary.pending} pending.`]:[]),
     'Tested records an attempted command and operator answers; it is not a door-function pass.',
     'A sent command confirms transmission only. Lock-off is not a claim that the door physically closed.',

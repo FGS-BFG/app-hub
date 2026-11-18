@@ -14,7 +14,7 @@ Reports belong in **1-Current productions → Field reports**. The portal uses t
 
 Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Record parkIT's current status when prompted. Close parkIT before the later USB connection step, then select the configured master's COM port.
 
-The guide walks through the mains cycle, master reset, five-board ISB checks, physical self-test and connection comparisons. It can monitor raw sensor inputs on one board or all five, and save a report with timestamps and raw USB traffic to Drive. Browser storage retains drafts and pending retries; a central save is confirmed by the Drive receipt.
+The guide walks through the mains cycle, master reset, installed-board ISB checks, physical self-test and connection comparisons. It can monitor raw sensor inputs on the fitted boards and save a report with timestamps and USB traffic to Drive. Browser storage retains drafts and pending retries; a central save is confirmed by the Drive receipt.
 
 ## Guided procedure
 
@@ -24,13 +24,17 @@ Next, cycle the locker mains supply and wait for startup. The following screen a
 
 Opening the port does not confirm communication. The guide requires a valid input-status reply from the configured master. If the connection is not confirmed within 60 seconds, it asks the operator to check the power and cable, close the parkIT app, then retry or use the physical self-test.
 
+When the expected master does not reply, one read-only A–E address check can identify other responding boards. Discovery includes addresses outside the selected capacity and does not reset a board or open a door. If A replies while C is expected, the operator can choose **Continue with board A only**. The page identifies A from a valid addressed reply; it does not assign A the locker-master role. Disconnecting invalidates an unconfirmed choice, and a different port requires a new check.
+
+After confirmation, subsequent inputs, monitoring and selected-door operations target only that board. Master reset, slave cable comparisons and discovery of other boards are blocked. One fresh input reading precedes the explicit door test. The report keeps the original layout/master as context, records discovery and the operator choice, and describes only the selected board's results. Reconnect retains that scope and requires fresh target readings before an explicit opening. A new report clears it. Scope cannot change after full locker checks or a reset have started.
+
 After the first valid reply, the guide watches the configured master for 60 seconds. A fresh final reply is required before Next becomes available. Failed replies or a disconnected USB port remove the ready status. Selecting Next sends the master reset automatically. After the reset wait, the next screen checks the fitted boards automatically.
 
 For a connection swap or replacement cable, the guide waits for the operator to confirm the physical change before it sends the corresponding checks. Detailed controls and the USB log are under Advanced diagnostics. Monitoring controls become available at the result. The optional location field starts blank.
 
 ## Protocol and limits
 
-The transport uses 9600 baud, 8N1, no flow control, DTR/RTS low, and ASCII commands terminated by CR with 10 ms character spacing. It accepts only `ISB#A` through `ISB#E` and `RST#C`. Reset waits six seconds; an acknowledgement does not establish a CPU reset or slave reset. No lock activation commands are sent.
+The transport uses 9600 baud, 8N1, no flow control, DTR/RTS low, and ASCII commands terminated by CR with 10 ms character spacing. Diagnostic commands are `ISB#A` through `ISB#E` and reset of the configured master. Reset waits six seconds; an acknowledgement does not establish a CPU reset or slave reset. The separate explicit door test uses the scoped opening and lock-off commands described below. Single-board testing blocks reset commands.
 
 Valid ISB replies must contain exactly 16 binary inputs and match the requested board. Silent timeouts record no response. USB failures, malformed replies and wrong addresses leave checks incomplete. Input 1 is the rightmost bit; open/closed polarity is not assumed. Multiple changes are observations, not component diagnoses.
 

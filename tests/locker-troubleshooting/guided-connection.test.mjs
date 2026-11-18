@@ -430,3 +430,184 @@ test('the proceeding guard can require a matching valid master while retaining n
   for(const master of [null,undefined,'','b','BC','F',2])assert.equal(shouldProceed(ready,master),false);
   assert.equal(shouldProceed({...ready,masterBoard:null}),false);
 });
+
+for(const [master,found] of [['C','A'],['B','E']]){
+  test(`a read-only address pass finding only ${found} never verifies expected master ${master}`,async t=>{
+    let discoveries=0;
+    const results=[{...validReply(found),raw:`<${found}>Ex(BIN):00000000:11111111~`}];
+    const{guide,clock,calls,events}=setup(t,{connected:true,getMaster:()=>master,
+      probe:async()=>({status:'no-response',board:master,code:'TIMEOUT'}),
+      discover:async()=>{discoveries++;return results;},
+    });
+    guide.start();await flush();await flush();
+    const snapshot=guide.snapshot();
+    assert.equal(snapshot.phase,'attention');assert.equal(snapshot.reason,'different-board');
+    assert.equal(snapshot.masterBoard,master);assert.deepEqual(snapshot.discoveredBoards,[found]);
+    assert.deepEqual(snapshot.discoveryResults,results);assert.equal(snapshot.discoveryAt,'1970-01-01T00:00:00.000Z');
+    assert.equal(snapshot.discoveryRunning,false);assert.equal(snapshot.verifiedAt,null);
+    assert.equal(snapshot.lastReplyAt,null);assert.equal(snapshot.goodReplyCount,0);
+    assert.equal(shouldProceed(snapshot,master),false);assert.equal(shouldProceed(snapshot,found),false);
+    results[0].bits='1'.repeat(16);snapshot.discoveryResults[0].raw='changed';snapshot.discoveredBoards.push('D');
+    assert.equal(guide.snapshot().discoveryResults[0].bits,'0000000011111111');
+    assert.notEqual(guide.snapshot().discoveryResults[0].raw,'changed');
+    assert.deepEqual(guide.snapshot().discoveredBoards,[found]);
+    await clock.advance(120000);assert.equal(discoveries,1);assert.equal(calls.length,1);
+    assert.ok(events.some(event=>event.code==='DIFFERENT_BOARD'));
+  });
+}
+
+test('discovery accepts unique valid addressed input words and preserves the raw failed observations separately',async t=>{
+  const results=[
+    validReply('A'),validReply('A'),
+    {...validReply('C'),bits:'0'.repeat(15)},
+    {...validReply('D'),bits:'0'.repeat(17)},
+    {...validReply('E'),bits:'000000000000000X'},
+    {...validReply('B'),status:'no-response'},
+    validReply('c'),validReply('F'),{status:'responded',bits:'0'.repeat(16)},null,
+  ];
+  const{guide}=setup(t,{connected:true,probe:async()=>({status:'no-response',board:'C'}),discover:async()=>results});
+  guide.start();await flush();await flush();
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'different-board');
+  assert.deepEqual(guide.snapshot().discoveredBoards,['A']);
+  assert.deepEqual(guide.snapshot().discoveryResults,results);
+  assert.equal(guide.snapshot().goodReplyCount,0);assert.equal(shouldProceed(guide.snapshot()),false);
+});
+
+test('finding the expected master requires a fresh expected probe before the full stability period',async t=>{
+  const fresh=deferred();let discoveries=0;
+  const{guide,clock,calls}=setup(t,{connected:true,
+    probe:n=>n===1?Promise.resolve({status:'no-response',board:'C'}):n===2?fresh.promise:Promise.resolve(validReply()),
+    discover:async()=>{discoveries++;return[validReply('C'),validReply('A')];},
+  });
+  guide.start();await flush();await flush();
+  assert.equal(discoveries,1);assert.equal(calls.length,2,'a fresh master probe follows the address pass');
+  assert.deepEqual(guide.snapshot().discoveredBoards,['A','C']);
+  assert.equal(guide.snapshot().phase,'waiting');assert.equal(guide.snapshot().goodReplyCount,0);
+  assert.equal(guide.snapshot().lastReplyAt,null);assert.equal(guide.snapshot().verifiedAt,null);
+  await clock.advance(10000);fresh.resolve(validReply());await flush();
+  assert.equal(guide.snapshot().phase,'watching');assert.equal(guide.snapshot().remainingSeconds,60);
+  assert.equal(guide.snapshot().goodReplyCount,1);assert.equal(guide.snapshot().lastReplyAt,10000);
+  await clock.advance(59000);assert.equal(guide.snapshot().phase,'watching');assert.equal(shouldProceed(guide.snapshot()),false);
+  await clock.advance(1000);assert.equal(guide.snapshot().phase,'ready');assert.equal(shouldProceed(guide.snapshot(),'C'),true);
+  assert.equal(discoveries,1);
+});
+
+test('a wrong or malformed expected-probe response can trigger discovery but is never itself identity evidence',async t=>{
+  for(const first of [validReply('A'),{...validReply('C'),bits:'0'.repeat(15)},{status:'error',code:'PROTOCOL'}]){
+    let discoveries=0;
+    const{guide,clock,calls}=setup(t,{connected:true,probe:async()=>first,discover:async()=>{discoveries++;return[];}});
+    guide.start();await flush();await flush();
+    assert.equal(discoveries,1);assert.equal(guide.snapshot().phase,'waiting');
+    assert.deepEqual(guide.snapshot().discoveredBoards,[]);assert.equal(guide.snapshot().goodReplyCount,0);
+    await clock.advance(59000);assert.ok(calls.length>1);assert.equal(discoveries,1,'only one discovery pass runs per start');
+    assert.equal(shouldProceed(guide.snapshot()),false);
+    await clock.advance(1000);assert.equal(guide.snapshot().phase,'attention');guide.stop();
+  }
+});
+
+test('discovery never overlaps the failed expected probe or later expected probes',async t=>{
+  const first=deferred(),discovery=deferred(),fresh=deferred();let discoveries=0;
+  const{guide,clock,calls}=setup(t,{connected:true,probe:n=>n===1?first.promise:fresh.promise,
+    discover:()=>{discoveries++;return discovery.promise;},
+  });
+  guide.start();await flush();await clock.advance(10000);
+  assert.equal(calls.length,1);assert.equal(discoveries,0);
+  first.resolve({status:'no-response',board:'C'});await flush();await flush();
+  assert.equal(discoveries,1);assert.equal(guide.snapshot().discoveryRunning,true);
+  await clock.advance(20000);assert.equal(calls.length,1);assert.equal(discoveries,1);
+  discovery.resolve([validReply()]);await flush();await flush();
+  assert.equal(calls.length,2);assert.equal(guide.snapshot().discoveryRunning,false);
+  assert.equal(guide.snapshot().phase,'waiting');assert.equal(guide.snapshot().goodReplyCount,0);
+  fresh.resolve(validReply());await flush();assert.equal(guide.snapshot().phase,'watching');
+});
+
+for(const action of ['stop','retry','disconnect','master-change']){
+  test(`${action} cancels discovery and ignores its late reply without stacking a new transaction`,async t=>{
+    let master='C',discoveries=0,stops=0;const discovery=deferred(),fresh=deferred();
+    const run=setup(t,{connected:true,getMaster:()=>master,
+      probe:n=>n===1?Promise.resolve({status:'no-response',board:'C'}):fresh.promise,
+      discover:()=>{discoveries++;return discovery.promise;},onStopDiscovery:()=>{stops++;},
+    });
+    const{guide,clock,calls,setConnected}=run;
+    guide.start();await flush();await flush();assert.equal(guide.snapshot().discoveryRunning,true);
+    if(action==='stop')guide.stop();
+    if(action==='retry')guide.retry();
+    if(action==='disconnect')setConnected(false);
+    if(action==='master-change'){master='B';await clock.advance(1000);}
+    await flush();assert.equal(stops,1);assert.equal(guide.snapshot().discoveryRunning,false);
+    await clock.advance(1000);assert.equal(calls.length,1,'the old physical discovery keeps its in-flight lock');
+    discovery.resolve([validReply('A'),validReply('C')]);await flush();await flush();
+    assert.deepEqual(guide.snapshot().discoveredBoards,[]);assert.deepEqual(guide.snapshot().discoveryResults,[]);
+    assert.equal(guide.snapshot().discoveryAt,'');assert.equal(guide.snapshot().verifiedAt,null);
+    if(action==='retry'){
+      assert.equal(calls.length,2);assert.equal(guide.snapshot().phase,'waiting');
+      assert.equal(guide.snapshot().goodReplyCount,0);
+      fresh.resolve(validReply());await flush();assert.equal(guide.snapshot().phase,'watching');
+    }else{
+      assert.equal(calls.length,1);assert.equal(guide.snapshot().phase,action==='stop'?'stopped':'attention');
+    }
+    assert.equal(discoveries,1);assert.equal(shouldProceed(guide.snapshot()),false);
+  });
+}
+
+test('a held discovery respects the connection deadline and its late evidence cannot revive the guide',async t=>{
+  const discovery=deferred();let stops=0;
+  const{guide,clock,calls}=setup(t,{connected:true,probe:async()=>({status:'no-response',board:'C'}),
+    discover:()=>discovery.promise,onStopDiscovery:()=>{stops++;return Promise.reject(Error('Adapter already stopped'));},
+  });
+  guide.start();await flush();await flush();assert.equal(guide.snapshot().discoveryRunning,true);
+  await clock.advance(60000);
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'connection-timeout');
+  assert.equal(stops,1);assert.equal(guide.snapshot().discoveryRunning,false);
+  discovery.resolve([validReply()]);await flush();
+  assert.equal(guide.snapshot().phase,'attention');assert.deepEqual(guide.snapshot().discoveredBoards,[]);
+  assert.equal(guide.snapshot().goodReplyCount,0);assert.equal(calls.length,1);
+});
+
+test('a rejected discovery is handled once while the normal master wait remains available',async t=>{
+  let discoveries=0;
+  const{guide,clock,calls}=setup(t,{connected:true,probe:async()=>({status:'no-response',board:'C'}),
+    discover:async()=>{discoveries++;throw Object.assign(Error('Address check incomplete'),{code:'PORT'});},
+  });
+  guide.start();await flush();await flush();
+  assert.equal(guide.snapshot().phase,'waiting');assert.equal(guide.snapshot().discoveryRunning,false);
+  assert.deepEqual(guide.snapshot().discoveredBoards,[]);
+  assert.equal(guide.snapshot().discoveryResults[0].code,'PORT');
+  await clock.advance(6000);assert.ok(calls.length>1);assert.equal(discoveries,1);
+});
+
+test('transport failures and failures after stability starts do not launch identity discovery',async t=>{
+  for(const code of ['DISCONNECTED','WRITE','PORT','BUSY','CONTROLLER']){
+    let discoveries=0;
+    const{guide}=setup(t,{connected:true,probe:async()=>({status:'error',code}),discover:async()=>{discoveries++;return[validReply('A')];}});
+    guide.start();await flush();await flush();assert.equal(discoveries,0);guide.stop();
+  }
+  let discoveries=0;
+  const{guide,clock}=setup(t,{connected:true,probe:async n=>n===1?validReply():{status:'no-response',board:'C'},
+    discover:async()=>{discoveries++;return[validReply('A')];},
+  });
+  guide.start();await flush();await clock.advance(3000);
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(discoveries,0);
+});
+
+test('disconnecting after a different-board finding invalidates that decision until an explicit fresh retry',async t=>{
+  let discoveries=0;
+  const{guide,clock,calls,setConnected}=setup(t,{connected:true,
+    probe:async n=>n===1?{status:'no-response',board:'C'}:validReply(),
+    discover:async()=>{discoveries++;return[validReply('A')];},
+  });
+  guide.start();await flush();await flush();
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'different-board');
+  const historical=guide.snapshot().discoveryResults;
+  setConnected(false);
+  assert.equal(guide.snapshot().reason,'disconnected');assert.equal(guide.snapshot().connected,false);
+  assert.deepEqual(guide.snapshot().discoveryResults,historical,'the old observation remains report evidence');
+  setConnected(true);await clock.advance(120000);
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'disconnected');
+  assert.equal(guide.snapshot().connected,true);assert.equal(calls.length,1);assert.equal(discoveries,1);
+  assert.equal(shouldProceed(guide.snapshot()),false);
+  guide.retry();await flush();
+  assert.equal(calls.length,2);assert.equal(guide.snapshot().phase,'watching');
+  assert.equal(guide.snapshot().goodReplyCount,1);assert.equal(guide.snapshot().remainingSeconds,60);
+  assert.deepEqual(guide.snapshot().discoveryResults,[]);assert.equal(shouldProceed(guide.snapshot()),false);
+});

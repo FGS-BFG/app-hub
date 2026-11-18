@@ -115,7 +115,7 @@ test('the UI operation mutex blocks scan, reset, public reads and other attempts
   assert.equal(run.calls.pulses.length,1);assert.equal(run.panel.busy,true);
   assert.equal(run.instances[0].busy,false,'the fake transport does not provide the mutex for this test');
   const reads=run.calls.queries.length;
-  for(const operation of [()=>run.panel.scan(),()=>run.panel.reset(),()=>run.panel.check('E'),()=>run.panel.openDoorTest('E',2),()=>run.panel.readDoorTestInputs('B')]){
+  for(const operation of [()=>run.panel.scan(),()=>run.panel.reset(),()=>run.panel.check('E'),()=>run.panel.discoverBoards(),()=>run.panel.openDoorTest('E',2),()=>run.panel.readDoorTestInputs('B')]){
     await assert.rejects(operation(),/current|finish|wait|busy/i);
   }
   await run.panel.connect();assert.equal(run.calls.ports,1);
@@ -301,4 +301,180 @@ test('an unconfirmed empty layout cannot open a port, query, reset or actuate ha
   assert.deepEqual(run.calls.queries,[]);assert.deepEqual(run.calls.pulses,[]);
   for(const id of ['usb-connect','usb-scan','usb-monitor'])assert.equal(run.document.elements.get(id).disabled,true);
   assert.equal(run.document.elements.get('usb-monitor-board').innerHTML,'<option value="all">All installed boards</option>');
+});
+
+const timeout=board=>Object.assign(Error('No addressed reply from '+board),{code:'TIMEOUT',raw:''});
+const onlyBoard=selected=>async(board,index,reading)=>{if(board!==selected)throw timeout(board);return reading(board);};
+
+test('explicit discovery finds A when the expected master is C and keeps discovery evidence separate',async()=>{
+  const run=await setup({query:onlyBoard('A')});
+  const results=await run.panel.discoverBoards();
+  assert.deepEqual(run.calls.queries,boards);assert.deepEqual(results.filter(result=>result.status==='responded').map(result=>result.board),['A']);
+  assert.ok(results.every(result=>result.stage==='discovery'));
+  assert.equal(results[0].bits,'0'.repeat(16));assert.match(results[0].raw,/<A>Ex\(BIN\)/);
+  assert.ok(results.slice(1).every(result=>result.status==='no-response'&&result.code==='TIMEOUT'&&!Object.hasOwn(result,'bits')));
+  const evidence=run.panel.snapshot();assert.equal(evidence.checks.length,5);
+  assert.ok(evidence.checks.every(result=>result.stage==='discovery'));
+  assert.deepEqual(evidence.boards,{},'discovery is not a post-reset installed-board result');
+  assert.deepEqual(evidence.events.filter(event=>event.stage==='discovery').map(event=>event.board),boards);
+  assert.equal(run.calls.reset,0);assert.equal(run.calls.pulses.length,0);assert.equal(run.panel.singleBoardTarget,null);
+  results[0].board='E';assert.equal(run.panel.snapshot().checks[0].board,'A');
+  assert.equal(run.panel.adoptSingleBoard('A'),'A','caller changes cannot alter the retained valid discovery');
+});
+
+test('discovery can read all A–E addresses outside 32-bay A,B without relaxing ordinary layout guards',async()=>{
+  const run=await setup({getBoards:()=>['A','B'],getMaster:()=> 'B',query:onlyBoard('E')});
+  await assert.rejects(run.panel.check('E'),error=>error.code==='LAYOUT');
+  const results=await run.panel.discoverBoards();assert.deepEqual(run.calls.queries,boards);
+  assert.deepEqual(results.filter(result=>result.status==='responded').map(result=>result.board),['E']);
+  const before=run.calls.queries.length;
+  await assert.rejects(run.panel.check('E'),error=>error.code==='LAYOUT');
+  await assert.rejects(run.panel.scan(['E']),error=>error.code==='LAYOUT');
+  assert.equal(run.calls.queries.length,before);assert.equal(run.calls.reset,0);assert.equal(run.calls.pulses.length,0);
+});
+
+test('wrong-address, malformed and inconsistent raw replies never identify a discovered board',async()=>{
+  const run=await setup({query:async(board,index,reading)=>{
+    if(board==='A')return reading('B');
+    if(board==='B')return{...reading('B'),raw:reading('C').raw};
+    if(board==='C')return reading('C','1'.repeat(17));
+    if(board==='D')return{...reading('D'),bits:undefined};
+    return{...reading('E'),status:'error'};
+  }});
+  const results=await run.panel.discoverBoards();
+  assert.ok(results.every(result=>result.status==='error'&&result.code==='PROTOCOL'&&!Object.hasOwn(result,'bits')));
+  assert.ok(results.every(result=>result.raw));
+  for(const board of boards)assert.throws(()=>run.panel.adoptSingleBoard(board),error=>error.code==='DISCOVERY');
+  assert.equal(run.panel.singleBoardTarget,null);assert.equal(run.calls.pulses.length,0);assert.equal(run.calls.reset,0);
+});
+
+test('discovery evidence retains bounded raw errors and canonical timestamps',async()=>{
+  const run=await setup({query:async(board,index,reading)=>{
+    if(board==='A')throw Object.assign(Error('x'.repeat(2000)),{code:'PROTOCOL',raw:'y'.repeat(2000)});
+    if(board==='B')return{...reading(board),at:'2026-11-18T12:00:00Z'};
+    throw timeout(board);
+  }});
+  const results=await run.panel.discoverBoards();
+  assert.equal(results[0].raw.length,1024);assert.equal(results[0].error.length,1000);
+  for(const result of results)assert.equal(new Date(result.at).toISOString(),result.at);
+  assert.equal(results[1].status,'responded');
+});
+
+test('a held discovery query owns the UI mutex and stop waits for that physical request to settle',async()=>{
+  const held=deferred(),run=await setup({query:()=>held.promise});
+  const pending=run.panel.discoverBoards(),rejected=assert.rejects(pending,error=>error.code==='CANCELLED'&&error.results.length===1);await flush();
+  assert.deepEqual(run.calls.queries,['A']);assert.equal(run.panel.busy,true);assert.equal(run.instances[0].busy,false);
+  for(const operation of [()=>run.panel.discoverBoards(),()=>run.panel.scan(),()=>run.panel.reset(),()=>run.panel.check('C'),()=>run.panel.openDoorTest('A',1),()=>run.panel.readDoorTestInputs('A')])await assert.rejects(operation(),/finish|current|wait/i);
+  assert.throws(()=>run.panel.adoptSingleBoard('A'),error=>error.code==='BUSY');
+  assert.throws(()=>run.panel.clear(),error=>error.code==='BUSY');
+  await run.panel.connect();assert.equal(run.calls.ports,1);
+  run.instances[0].options.onEvent({type:'rx',raw:'<A>partial'});
+  assert.equal(run.panel.snapshot().events.at(-1).stage,'discovery');
+  let settled=false;const stopping=run.panel.stopDiscovery().then(results=>{settled=true;return results;});await flush();
+  assert.equal(settled,false);assert.equal(run.panel.busy,true);assert.deepEqual(run.calls.queries,['A']);
+  held.resolve(run.reading('A'));await rejected;const results=await stopping;
+  assert.equal(settled,true);assert.equal(results.length,1);assert.equal(run.panel.busy,false);
+  await run.clock.advance(60000);assert.deepEqual(run.calls.queries,['A']);assert.equal(run.calls.reset,0);assert.equal(run.calls.pulses.length,0);
+});
+
+test('an ordinary held query also prevents a discovery pass from overlapping it',async()=>{
+  const held=deferred(),run=await setup({query:()=>held.promise});
+  const pending=run.panel.check('C');await flush();
+  await assert.rejects(run.panel.discoverBoards(),error=>error.code==='BUSY');assert.deepEqual(run.calls.queries,['C']);
+  held.resolve(run.reading('C'));await pending;assert.equal(run.panel.busy,false);
+});
+
+for(const action of ['hidden','pagehide','disconnect','layout','master'])test(`discovery stops before another query after ${action}`,async()=>{
+  let targets=[...boards],master='C';const held=deferred();
+  const run=await setup({getBoards:()=>targets,getMaster:()=>master,query:()=>held.promise});
+  const pending=run.panel.discoverBoards(),rejected=assert.rejects(pending,error=>['CANCELLED','DISCONNECTED','LAYOUT'].includes(error.code)&&error.results.length===1);await flush();
+  if(action==='hidden')run.hide();
+  if(action==='pagehide')run.pagehide();
+  if(action==='disconnect')await run.panel.disconnect();
+  if(action==='layout'){targets=['A','B','C','D'];run.panel.refreshLayout();}
+  if(action==='master')master='B';
+  held.resolve(run.reading('A'));await rejected;await run.clock.advance(60000);
+  assert.deepEqual(run.calls.queries,['A']);assert.equal(run.calls.reset,0);assert.equal(run.calls.pulses.length,0);
+  assert.equal(run.panel.busy,false);assert.equal(run.panel.snapshot().checks[0].stage,'discovery');
+});
+
+test('fatal transport errors stop discovery after recording the attempted address',async()=>{
+  const run=await setup({query:async()=>{throw Object.assign(Error('USB failed'),{code:'DISCONNECTED',raw:'<A>partial'});}});
+  await assert.rejects(run.panel.discoverBoards(),error=>error.code==='DISCONNECTED'&&error.results[0].raw==='<A>partial');
+  assert.deepEqual(run.calls.queries,['A']);assert.equal(run.panel.busy,false);
+  assert.throws(()=>run.panel.adoptSingleBoard('A'),error=>error.code==='DISCOVERY');
+});
+
+test('discovery cannot run without a connected port or from a hidden page',async()=>{
+  const closed=await setup({autoConnect:false});await assert.rejects(closed.panel.discoverBoards(),error=>error.code==='DISCONNECTED');
+  assert.deepEqual(closed.calls.queries,[]);assert.equal(closed.calls.ports,0);
+  const hidden=await setup();hidden.hide();await assert.rejects(hidden.panel.discoverBoards(),error=>error.code==='CANCELLED');assert.deepEqual(hidden.calls.queries,[]);
+});
+
+test('adopting A is explicit, sends no I/O and restricts reads, monitoring and door tests to A',async()=>{
+  const run=await setup({query:onlyBoard('A')});
+  assert.throws(()=>run.panel.adoptSingleBoard('A'),error=>error.code==='DISCOVERY');
+  await run.panel.discoverBoards();const before=run.calls.queries.length;
+  assert.equal(run.panel.adoptSingleBoard('A'),'A');assert.equal(run.panel.singleBoardTarget,'A');assert.equal(run.calls.queries.length,before);
+  assert.equal(run.instances[0].masterBoard,'C');
+  assert.match(run.document.elements.get('usb-settings').textContent,/single board A; locker master C not confirmed/);
+  assert.doesNotMatch(run.document.elements.get('usb-settings').textContent,/master A/);
+  assert.equal(run.panel.adoptSingleBoard('A'),'A');assert.throws(()=>run.panel.adoptSingleBoard('B'),error=>error.code==='SCOPE');
+  await assert.rejects(run.panel.reset(),error=>error.code==='SCOPE');await assert.rejects(run.panel.discoverBoards(),error=>error.code==='SCOPE');
+  for(const operation of [()=>run.panel.check('C'),()=>run.panel.scan(['A','C']),()=>run.panel.openDoorTest('B',1),()=>run.panel.readDoorTestInputs('B')])await assert.rejects(operation(),error=>error.code==='LAYOUT');
+  await run.panel.check('A');const scan=run.panel.scan();await flush();await run.clock.advance(250);await scan;
+  const select=run.document.elements.get('usb-monitor-board');assert.ok(select.innerHTML.includes('value="A"'));assert.ok(!select.innerHTML.includes('value="C"'));
+  const watch=run.document.elements.get('usb-monitor').listeners.get('click')();await flush();run.panel.stopMonitor();await run.clock.advance(500);await watch;
+  const commands=[],samples=[],doorStart=run.calls.queries.length;
+  await run.finish(run.panel.openDoorTest('A',7,{onCommand:value=>commands.push(clone(value)),onSample:(phase,result)=>samples.push({phase,result:clone(result)})}));
+  assert.deepEqual(run.calls.queries.slice(doorStart,doorStart+2),['A','A']);
+  await run.panel.readDoorTestInputs('A');
+  assert.ok(run.calls.queries.slice(before).every(board=>board==='A'));assert.ok(samples.every(sample=>sample.result.board==='A'));
+  assert.equal(run.calls.pulses.length,1);assert.equal(run.calls.pulses[0].board,'A');assert.equal(run.calls.pulses[0].door,7);
+  assert.equal(commands[0].openCommand,'LA6#A');assert.equal(commands[0].offCommand,'LMX#A');assert.equal(run.calls.reset,0);
+});
+
+test('explicit adoption permits only discovered E outside a 32-bay A,B layout without querying master B',async()=>{
+  const run=await setup({getBoards:()=>['A','B'],getMaster:()=> 'B',query:onlyBoard('E')});
+  await run.panel.discoverBoards();const before=run.calls.queries.length;
+  run.panel.adoptSingleBoard('E');assert.equal(run.panel.singleBoardTarget,'E');assert.equal(run.instances[0].masterBoard,'B');
+  await run.panel.check('E');await run.finish(run.panel.openDoorTest('E',16));await run.panel.readDoorTestInputs('E');
+  assert.ok(run.calls.queries.slice(before).every(board=>board==='E'));
+  assert.deepEqual(run.calls.pulses.map(pulse=>[pulse.board,pulse.door]),[['E',16]]);assert.equal(run.calls.reset,0);
+  await assert.rejects(run.panel.check('A'),error=>error.code==='LAYOUT');await assert.rejects(run.panel.reset(),error=>error.code==='SCOPE');
+  assert.match(run.document.elements.get('usb-settings').textContent,/single board E; locker master B not confirmed/);
+});
+
+test('single-board intent survives reconnect but a fresh failed target baseline still forbids activation',async()=>{
+  let failing=false;const run=await setup({query:async(board,index,reading)=>{if(board!=='A'||failing)throw timeout(board);return reading(board);}});
+  await run.panel.discoverBoards();run.panel.adoptSingleBoard('A');
+  assert.throws(()=>run.panel.clear(),error=>error.code==='SCOPE');
+  await run.panel.disconnect();await run.panel.connect();assert.equal(run.panel.singleBoardTarget,'A');assert.equal(run.calls.ports,2);
+  assert.equal(run.panel.adoptSingleBoard('A'),'A');
+  const before=run.calls.queries.length;failing=true;
+  await assert.rejects(run.panel.openDoorTest('A',1),error=>error.code==='BASELINE');
+  assert.deepEqual(run.calls.queries.slice(before),['A']);assert.equal(run.calls.pulses.length,0);assert.equal(run.calls.reset,0);
+  await run.panel.disconnect();const beforeClear=run.calls.queries.length;run.panel.clear();
+  assert.equal(run.panel.singleBoardTarget,null);assert.equal(run.calls.queries.length,beforeClear);assert.deepEqual(run.panel.snapshot().checks,[]);
+  assert.ok(run.document.elements.get('usb-monitor-board').innerHTML.includes('value="C"'));
+});
+
+test('a completed discovery cannot be reused to adopt a board on a different port',async()=>{
+  const run=await setup({query:onlyBoard('A')});await run.panel.discoverBoards();
+  await run.panel.disconnect();await run.panel.connect();
+  assert.throws(()=>run.panel.adoptSingleBoard('A'),error=>error.code==='DISCOVERY');assert.equal(run.panel.singleBoardTarget,null);
+  assert.equal(run.calls.pulses.length,0);assert.equal(run.calls.reset,0);
+});
+
+test('a cancelled discovery retry cannot reuse an earlier completed identity result',async()=>{
+  let heldMode=false;const held=deferred();
+  const run=await setup({query:async(board,index,reading)=>{
+    if(heldMode)return held.promise;
+    if(board!=='A')throw timeout(board);return reading(board);
+  }});
+  await run.panel.discoverBoards();heldMode=true;
+  const pending=run.panel.discoverBoards(),rejected=assert.rejects(pending,error=>error.code==='CANCELLED');await flush();
+  const stopping=run.panel.stopDiscovery();held.resolve(run.reading('A'));await stopping;await rejected;
+  assert.throws(()=>run.panel.adoptSingleBoard('A'),error=>error.code==='DISCOVERY');
+  assert.equal(run.panel.singleBoardTarget,null);assert.equal(run.calls.pulses.length,0);assert.equal(run.calls.reset,0);
 });

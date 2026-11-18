@@ -1,5 +1,6 @@
-import {freshDoorTests,getDoorTargets,getDoorMaster,doorTestsComplete,formatDoorTests} from './door-test.js?v=20261118-master';
+import {freshDoorTests,getDoorTargets,getDoorMaster,doorTestsComplete,formatDoorTests} from './door-test.js?v=20261118-detect';
 import {ALL_BOARDS,LAYOUTS,boardsFor,masterFor} from './layouts.js?v=20261118-master';
+import {freshBoardDetection,validateBoardDetection,detectedSelection,formatBoardDetection} from './board-detection.js?v=20261118-detect';
 
 import {freshBeforeRestart,beforeRestartComplete} from './before-restart.js?v=20261118-before-restart';
 
@@ -24,7 +25,7 @@ export const BOARD_CONFIGURATIONS = Object.freeze([
   Object.freeze({id:'unsure',label:'Not sure'}),
 ]);
 export function freshSession() {
-  return {version:1, step:'welcome', details:{location:'', technician:'', notes:'', lockerCapacity:'', boardConfiguration:'', masterBoardLabel:'', slaveBoardLabels:'', configurationNotes:''}, beforeRestart:freshBeforeRestart(), connection:'', connectionIssue:false, initial:{}, recheck:{}, selftest:'', affected:'', neighbor:'', swapped:{}, cable:'', acknowledged:false, doorTests:freshDoorTests(), history:[], log:[], started:new Date().toISOString()};
+  return {version:1, step:'welcome', details:{location:'', technician:'', notes:'', lockerCapacity:'', boardConfiguration:'', masterBoardLabel:'', slaveBoardLabels:'', configurationNotes:''}, beforeRestart:freshBeforeRestart(), boardDetection:freshBoardDetection(), connection:'', connectionIssue:false, initial:{}, recheck:{}, selftest:'', affected:'', neighbor:'', swapped:{}, cable:'', acknowledged:false, doorTests:freshDoorTests(), history:[], log:[], started:new Date().toISOString()};
 }
 const validBoards=boards=>Array.isArray(boards)&&boards.length>0&&new Set(boards).size===boards.length&&boards.every(board=>BOARDS.includes(board));
 export function allChecked(results, boards=BOARDS) { return validBoards(boards)&&!!results&&boards.every(b=>STATES.includes(results[b])); }
@@ -47,6 +48,8 @@ export function swapFinding(s) {
 }
 export function validateStep(s) {
   const boards=boardsFor(s);
+  const selected=detectedSelection(s);
+  if(s.step==='single-board')return !!selected&&s.boardDetection.checks.length>0;
   if(s.step==='welcome') return LOCKER_CAPACITIES.some(option=>option.id===s.details?.lockerCapacity);
   if(s.step==='identify') return boards.length>0&&BOARD_CONFIGURATIONS.some(option=>option.id===s.details?.boardConfiguration);
   if(s.step==='before-restart') return beforeRestartComplete(s.beforeRestart,boards);
@@ -58,7 +61,7 @@ export function validateStep(s) {
   if(s.step==='connector') return canCompare(s,boards)&&s.acknowledged===true;
   if(s.step==='swap') return canCompare(s,boards)&&swapFinding(s)!=='incomplete';
   if(s.step==='cable') return canCompare(s,boards)&&(STATES.includes(s.cable)||s.cable==='uncertain');
-  if(s.step==='doors') return doorTestsComplete(s.doorTests,boards,masterFor(s));
+  if(s.step==='doors') return (!s.boardDetection?.selection||!!selected)&&doorTestsComplete(s.doorTests,selected?[selected]:boards,selected?null:masterFor(s));
   return true;
 }
 export function nextStep(s) {
@@ -66,7 +69,7 @@ export function nextStep(s) {
   const boards=boardsFor(s);
   const master=masterFor(s);
   if(s.step==='connect'&&s.connection==='unavailable') return 'selftest';
-  const seq={welcome:'identify',identify:'before-restart','before-restart':'power',power:'connect',startup:'connect',connect:'reset',reset:'initial',selftest:'retry',retry:'recheck',select:'connector',connector:'swap'};
+  const seq={welcome:'identify',identify:'before-restart','before-restart':'power',power:'connect',startup:'connect',connect:'reset',reset:'initial',selftest:'retry',retry:'recheck',select:'connector',connector:'swap','single-board':'doors'};
   if(seq[s.step]) return seq[s.step];
   if(s.step==='initial') return allResponded(s.initial,boards)?'doors':'selftest';
   if(s.step==='recheck') return allResponded(s.recheck,boards)||s.recheck[master]!=='responded'||!LAYOUTS['80'].adjacentSlavePairs.some(pair=>!pair.includes(master)&&pair.every(board=>boards.includes(board)))?'doors':'select';
@@ -76,6 +79,9 @@ export function nextStep(s) {
   return null;
 }
 export function outcome(s) {
+  try{validateBoardDetection(s.boardDetection);}catch{return{kind:'unresolved',title:'Board-detection evidence needs review',summary:'The detection or selected-board record could not be validated.',next:'Keep the original evidence. No board selection, locker communication result or component diagnosis is inferred from an invalid record.'};}
+  const selected=detectedSelection(s);
+  if(selected)return selectedBoardOutcome(s,selected);
   const boards=boardsFor(s);
   const master=masterFor(s);
   if(!boards.length)return{kind:'unresolved',title:'Locker layout is not confirmed',summary:'The selected capacity does not have a confirmed board map. Communication and door-test completion cannot be established.',next:'Record which columns are installed and confirm the master before running locker checks. No board, cable, hub or door fault has been established.'};
@@ -94,6 +100,13 @@ export function outcome(s) {
   if(finding==='both-failed') return {kind:'unresolved',title:'The swap did not isolate the fault',summary:`Neither ${s.affected} nor ${s.neighbor} responded after the swap.`,next:'Save both results and the connections changed. Do not assign the fault to one board, cable or hub from this test.'};
   return {kind:'unresolved',title:'Further investigation is needed',summary:remaining.length?`Boards without a response: ${remaining.join(', ')}.`:'The communication results are incomplete.',next:'There is no completed comparison with an adjacent working slave board. Save the report for support.'};
 }
+function selectedBoardOutcome(s,board){
+  const latest=s.boardDetection.checks.at(-1);
+  const next='This limited result concerns communication with the selected board only, not door functionality or the rest of the locker. No RST was performed on the limited single-board path.';
+  if(!latest)return{kind:'unresolved',title:`Board ${board} check is pending (single-board check)`,summary:`Board ${board} was detected and explicitly selected. A subsequent selected-board ISB check has not been recorded.`,next};
+  if(latest.status==='responded')return{kind:'success',title:`Board ${board} responded (single-board check)`,summary:`Communication was confirmed with board ${board} only during the selected-board check. No other board or locker-master identity was confirmed.`,next};
+  return{kind:'unresolved',title:latest.status==='no-response'?`Board ${board} did not respond (single-board check)`:`Board ${board} check is incomplete (single-board check)`,summary:latest.status==='no-response'?`The latest selected-board check did not receive a reply from ${board}. This is not a hardware diagnosis.`:`The latest selected-board check recorded ${latest.code||'an error'}${latest.error?': '+latest.error:'.'} No component fault has been established.`,next};
+}
 export function report(s, {savedAt = new Date().toISOString()} = {}) {
   const boards=boardsFor(s);
   const master=masterFor(s);
@@ -109,7 +122,13 @@ export function report(s, {savedAt = new Date().toISOString()} = {}) {
   const selected=BOARD_CONFIGURATIONS.find(option=>option.id===s.details.boardConfiguration);
   const configuration=selected?.label||(s.details.boardConfiguration?`Unrecognised selection: ${s.details.boardConfiguration}`:'Not recorded');
   const boardConfiguration=`BOARD CONFIGURATION\nOperator-observed setup: ${configuration}\nMaster board label: ${observed(s.details.masterBoardLabel)}\nSlave board labels: ${observed(s.details.slaveBoardLabels)}\nConfiguration notes: ${observed(s.details.configurationNotes)}`;
-  return `MCI 304 LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nLocker capacity: ${capacity}\n${masterCaption}: ${master||'Not confirmed'}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${savedAt}\n\n${boardConfiguration}${contextNotice}\n\n${formatBeforeRestart(s)}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nUSB COM CONNECTION\n${s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded')}\n${s.connectionIssue?'A connection problem was recorded during this session.\n':''}\nINITIAL ISB CHECK\n${results(s.initial)}\n\nSELF-TEST\n${s.selftest||'Not performed'}\n\n${resetHeading}\n${results(s.recheck)}\n\nCONNECTION COMPARISON\nOriginal affected board: ${s.affected||'Not selected'}\nAdjacent working slave: ${s.neighbor||'Not selected'}\nAfter swap: ${s.affected||'?'} ${s.swapped[s.affected]||'not checked'}; ${s.neighbor||'?'} ${s.swapped[s.neighbor]||'not checked'}\nKnown working cable on same hub connection: ${s.cable||'Not checked'}${historicalReadings(s,recordedBoards)}\n\n${formatDoorTests(s.doorTests,boards,master)}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(e=>`${e.at} | ${e.label}`).join('\n')}\n\n${s.mode==='usb'?'USB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator.':'Commands were sent manually in the test application. Results above were recorded by the operator.'} Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s,recordedBoards):''}`;
+  const detected=detectedSelection(s);
+  if(detected)return singleBoardReport(s,{savedAt,board:detected,boards,master,capacity,boardConfiguration,result});
+  return `MCI 304 LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nLocker capacity: ${capacity}\n${masterCaption}: ${master||'Not confirmed'}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${savedAt}\n\n${boardConfiguration}${contextNotice}\n\n${formatBeforeRestart(s)}\n\n${formatBoardDetection(s.boardDetection)}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nUSB COM CONNECTION\n${s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded')}\n${s.connectionIssue?'A connection problem was recorded during this session.\n':''}\nINITIAL ISB CHECK\n${results(s.initial)}\n\nSELF-TEST\n${s.selftest||'Not performed'}\n\n${resetHeading}\n${results(s.recheck)}\n\nCONNECTION COMPARISON\nOriginal affected board: ${s.affected||'Not selected'}\nAdjacent working slave: ${s.neighbor||'Not selected'}\nAfter swap: ${s.affected||'?'} ${s.swapped[s.affected]||'not checked'}; ${s.neighbor||'?'} ${s.swapped[s.neighbor]||'not checked'}\nKnown working cable on same hub connection: ${s.cable||'Not checked'}${historicalReadings(s,recordedBoards)}\n\n${formatDoorTests(s.doorTests,boards,master)}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(e=>`${e.at} | ${e.label}`).join('\n')}\n\n${s.mode==='usb'?'USB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator.':'Commands were sent manually in the test application. Results above were recorded by the operator.'} Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s,recordedBoards):''}`;
+}
+function singleBoardReport(s,{savedAt,board,boards,master,capacity,boardConfiguration,result}){
+ const connection=s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded');
+ return `MCI 304 LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nLocker capacity: ${capacity} (context only)\nConfigured layout columns (context only): ${boards.join(', ')||'Not confirmed'}\nConfigured layout master (context only): ${master||'Not confirmed'}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${savedAt}\n\n${boardConfiguration}\n\n${formatBeforeRestart(s)}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nSINGLE-BOARD TEST SCOPE\nExplicit operator choice: Test detected board ${board} only.\nNo locker-master role is assigned to this board. Other columns and full-locker communication were not assessed on this limited path.\nNo RST was performed on the limited single-board path.\n\n${formatBoardDetection(s.boardDetection)}\n\nUSB COM CONNECTION\n${connection}\n\n${formatDoorTests(s.doorTests,[board],null)}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(entry=>`${entry.at} | ${entry.label}`).join('\n')}\n\nUSB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator. Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s,[board]):''}`;
 }
 function formatBeforeRestart(s){
  const observation=s.beforeRestart;

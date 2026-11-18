@@ -4,6 +4,13 @@ const activePhases = new Set(['waiting', 'watching', 'ready']);
 const duration = (value, fallback, minimum = 0) =>
   Number.isFinite(value) && value >= minimum ? value : fallback;
 const validMaster = value => typeof value === 'string' && /^[A-E]$/.test(value);
+const boardLetters = ['A', 'B', 'C', 'D', 'E'];
+const validInputReply = value => value?.status === 'responded' && validMaster(value.board)
+  && typeof value.bits === 'string' && /^[01]{16}$/.test(value.bits);
+const cloneResults = value => {
+  try { return structuredClone(value); }
+  catch { return []; }
+};
 
 export function shouldProceed(snapshot, expectedMaster) {
   const matchesExpected = arguments.length < 2 || validMaster(expectedMaster) && snapshot?.masterBoard === expectedMaster;
@@ -14,15 +21,19 @@ export function shouldProceed(snapshot, expectedMaster) {
 }
 
 export class GuidedConnection {
-  constructor({isConnected = () => false, getMaster = () => 'C', probe, onChange = () => {}, onEvent = () => {},
+  constructor({isConnected = () => false, getMaster = () => 'C', probe, discover, onStopDiscovery = () => {}, onChange = () => {}, onEvent = () => {},
     now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout,
     connectionWaitMs = 60000, stabilityMs = 60000, pollMs = 3000} = {}) {
     if (typeof probe !== 'function') throw new TypeError('A master probe function is required.');
     if (typeof getMaster !== 'function') throw new TypeError('A master selection function is required.');
+    if (discover !== undefined && typeof discover !== 'function') throw new TypeError('Board discovery must be a function.');
+    if (typeof onStopDiscovery !== 'function') throw new TypeError('Stopping board discovery must be a function.');
     this._isConnected = isConnected;
     this._getMaster = getMaster;
     this._masterBoard = this._readMaster();
     this._probe = probe;
+    this._discover = discover;
+    this._onStopDiscovery = onStopDiscovery;
     this._onChange = onChange;
     this._onEvent = onEvent;
     this._now = now;
@@ -46,6 +57,12 @@ export class GuidedConnection {
     this._stabilityDeadline = 0;
     this._nextProbeAt = Infinity;
     this._hasConnected = false;
+    this._discoveryAttempted = false;
+    this._discoveryPending = false;
+    this._discoveryRunning = false;
+    this._discoveredBoards = [];
+    this._discoveryResults = [];
+    this._discoveryAt = '';
   }
 
   snapshot() {
@@ -60,6 +77,10 @@ export class GuidedConnection {
       verifiedAt: this._verifiedAt,
       lastReplyAt: this._lastReplyAt,
       goodReplyCount: this._goodReplyCount,
+      discoveredBoards: [...this._discoveredBoards],
+      discoveryResults: cloneResults(this._discoveryResults),
+      discoveryAt: this._discoveryAt,
+      discoveryRunning: this._discoveryRunning,
     };
   }
 
@@ -68,7 +89,12 @@ export class GuidedConnection {
   start() {
     this._generation++;
     this._cancelTimer();
+    this._stopDiscovery();
     this._clearProof();
+    this._discoveryAttempted = false;
+    this._discoveredBoards = [];
+    this._discoveryResults = [];
+    this._discoveryAt = '';
     this._phase = 'waiting';
     this._reason = '';
     this._masterBoard = this._readMaster();
@@ -91,6 +117,7 @@ export class GuidedConnection {
   stop() {
     this._generation++;
     this._cancelTimer();
+    this._stopDiscovery();
     this._phase = 'stopped';
     this._reason = '';
     this._clearProof();
@@ -106,6 +133,12 @@ export class GuidedConnection {
     const wasConnected = this._connected;
     this._connected = connected === true;
     if (this._connected) this._hasConnected = true;
+    if (this._phase === 'attention' && this._reason === 'different-board' && !this._connected) {
+      // An address observed on the old port is historical evidence, not a
+      // decision that a newly opened port can inherit without another check.
+      this._attention('disconnected', 'The USB connection was lost after the board address check. Reconnect and check the addresses again before choosing a board.', 'DISCONNECTED');
+      return;
+    }
     if (activePhases.has(this._phase) && !this._checkMaster()) return;
     if (activePhases.has(this._phase) && !this._connected && (wasConnected || this._hasConnected)) {
       this._attention('disconnected', 'The USB connection was lost. Repeat the connection check.', 'DISCONNECTED');
@@ -150,6 +183,15 @@ export class GuidedConnection {
     this._timer = null;
   }
 
+  _stopDiscovery() {
+    this._discoveryPending = false;
+    if (!this._discoveryRunning) return;
+    this._discoveryRunning = false;
+    // Cancellation asks the adapter to stop after its current physical read.
+    // The shared in-flight lock stays held until that promise actually settles.
+    try { Promise.resolve(this._onStopDiscovery()).catch(() => {}); } catch {}
+  }
+
   _publish() {
     try { this._onChange(this.snapshot()); } catch {}
   }
@@ -164,6 +206,7 @@ export class GuidedConnection {
   _attention(reason, message, code) {
     this._generation++;
     this._cancelTimer();
+    this._stopDiscovery();
     this._phase = 'attention';
     this._reason = reason;
     this._clearProof();
@@ -194,7 +237,10 @@ export class GuidedConnection {
     }
 
     const finalProbeDue = this._phase === 'watching' && current >= this._stabilityDeadline;
-    if (this._connected && !this._inFlight && (finalProbeDue || current >= this._nextProbeAt)) this._launchProbe();
+    if (this._connected && !this._inFlight) {
+      if (this._discoveryPending) this._launchDiscovery();
+      else if (finalProbeDue || current >= this._nextProbeAt) this._launchProbe();
+    }
     this._publish();
     this._schedule();
   }
@@ -236,6 +282,65 @@ export class GuidedConnection {
     });
   }
 
+  _launchDiscovery() {
+    if (this._inFlight || this._phase !== 'waiting' || !this._discoveryPending || !this._discover) return;
+    if (!this._checkMaster()) return;
+    const request = {kind: 'discovery', generation: this._generation, masterBoard: this._masterBoard};
+    this._inFlight = request;
+    this._discoveryPending = false;
+    this._discoveryRunning = true;
+    this._event('info', 'No valid reply was received from the expected master. Checking board addresses without changing any outputs.');
+    this._publish();
+    Promise.resolve().then(() => {
+      if (request.generation !== this._generation || this._phase !== 'waiting') return null;
+      if (!this._checkMaster()) return null;
+      return this._discover();
+    }).then(
+      results => this._handleDiscovery(request, results),
+      error => this._handleDiscovery(request, [{status: 'error', code: error?.code || 'DISCOVERY', error: error?.message || String(error)}]),
+    ).catch(error => {
+      if (request.generation === this._generation && activePhases.has(this._phase)) {
+        this._attention('discovery-error', 'The board address check could not be completed. Repeat the connection check.', error?.code || 'DISCOVERY');
+      }
+    }).finally(() => {
+      if (this._inFlight === request) this._inFlight = null;
+      if (activePhases.has(this._phase)) this._tick();
+    });
+  }
+
+  _handleDiscovery(request, results) {
+    if (request.generation !== this._generation || this._phase !== 'waiting') return;
+    if (!this._checkMaster()) return;
+    this._connected = this._readConnection();
+    if (!this._connected) {
+      this._attention('disconnected', 'The USB connection was lost during the board address check. Repeat the connection check.', 'DISCONNECTED');
+      return;
+    }
+    const current = this._now();
+    if (current >= this._waitDeadline) {
+      this._attention('connection-timeout', `No valid master ${this._masterBoard} reply was confirmed before the connection deadline. Check the connection and try again.`, 'CONNECTION_TIMEOUT');
+      return;
+    }
+    this._discoveryRunning = false;
+    this._discoveryResults = cloneResults(Array.isArray(results) ? results : []);
+    this._discoveryAt = new Date(current).toISOString();
+    const validBoards = new Set(this._discoveryResults.filter(validInputReply).map(reply => reply.board));
+    this._discoveredBoards = boardLetters.filter(board => validBoards.has(board));
+    if (validBoards.has(request.masterBoard)) {
+      // Discovery identifies an address; it never contributes stability proof.
+      // A new expected-master request must start the normal observation period.
+      this._nextProbeAt = current;
+      this._event('info', `Master ${request.masterBoard} replied during the address check. Requesting a fresh reply before checking connection stability.`);
+    } else if (this._discoveredBoards.length) {
+      this._attention('different-board', `Board${this._discoveredBoards.length === 1 ? '' : 's'} ${this._discoveredBoards.join(', ')} replied, but expected master ${request.masterBoard} did not. Review the installed board labels before continuing.`, 'DIFFERENT_BOARD');
+      return;
+    } else {
+      this._nextProbeAt = current + this._pollMs;
+      this._event('warning', 'The address check did not receive a valid board reply. Still waiting for the expected master within the connection deadline.', 'NO_BOARD_REPLY');
+    }
+    this._publish();
+  }
+
   _handleReply(request, reply) {
     if (request.generation !== this._generation || !activePhases.has(this._phase)) return;
     if (!this._checkMaster()) return;
@@ -250,8 +355,7 @@ export class GuidedConnection {
       return;
     }
 
-    const valid = request.masterBoard === this._masterBoard && reply?.status === 'responded' && reply.board === request.masterBoard
-      && typeof reply.bits === 'string' && /^[01]{16}$/.test(reply.bits);
+    const valid = request.masterBoard === this._masterBoard && validInputReply(reply) && reply.board === request.masterBoard;
     this._nextProbeAt = current + this._pollMs;
     if (!valid) {
       const code = reply?.status === 'responded' ? 'PROTOCOL'
@@ -259,6 +363,10 @@ export class GuidedConnection {
       const reason = code === 'TIMEOUT' ? 'no-response' : String(code).toLowerCase();
       if (this._phase === 'waiting') {
         this._reason = reason;
+        if (this._discover && !this._discoveryAttempted && ['TIMEOUT', 'PROTOCOL'].includes(code)) {
+          this._discoveryAttempted = true;
+          this._discoveryPending = true;
+        }
         this._event('warning', `The master ${this._masterBoard} probe did not produce a valid addressed reply. Still waiting within the connection deadline.`, code);
         this._publish();
       } else {

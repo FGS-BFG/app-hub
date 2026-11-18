@@ -8,6 +8,7 @@ export function changedInputs(previous,bits){return typeof previous==='string'&&
 export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=> 'C',onSave=()=>{},onConnection=()=>{},onBusy=()=>{},onScanRequested=null}={}){
  let transport=null,connecting=false,disconnecting=false,disconnectTask=null,operation=false,monitoring=false,monitorToken=0,token=0,intentionalClose=false,doorStop=false;
  let connectedBoards=[];
+ let discovery=null,lastDiscovery=null,singleBoardTarget=null;
  let data={boards:{},events:[],observations:[],checks:[],...saved};
  for(const key of ['events','observations','checks'])if(!Array.isArray(data[key]))data[key]=[];
  if(!data.boards||typeof data.boards!=='object')data.boards={};
@@ -18,12 +19,13 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
  root.innerHTML=`<section class="usb-panel" aria-labelledby="usb-title"><div class="usb-heading"><div><span class="sidebar-title">LIVE LOCKER CONNECTION</span><h2 id="usb-title">Check the locker over USB</h2></div><span id="usb-badge" class="usb-badge">Disconnected</span></div><p id="usb-compatibility">${supported?'Use this page in desktop Chrome or Edge. Close the parkIT app before connecting; only one application can use the COM port.':'Open this page in desktop Chrome or Edge to use USB serial. This browser does not provide access to the locker COM port.'}</p><div class="usb-controls"><button class="primary" id="usb-connect">Connect locker USB</button><button class="secondary" id="usb-disconnect" disabled>Disconnect</button><button class="secondary" id="usb-scan" disabled>Check installed boards</button><button class="secondary" id="usb-monitor" disabled>Watch sensor inputs</button></div><label class="usb-watch-label">Watch inputs on <select id="usb-monitor-board"><option value="all">All installed boards</option></select></label><p id="usb-message" role="status"></p><p id="usb-error" class="usb-error" role="alert"></p><div class="usb-settings" id="usb-settings"></div><details id="usb-live-details"><summary>Board replies, sensor inputs and USB log</summary><p class="usb-help">Inputs 1–16 show the raw electrical value. A reply confirms communication. Input changes are observations; they do not identify a faulty component.</p><div id="usb-board-list"></div><div class="usb-log-header"><strong>Recent observations</strong><button class="text-button" id="usb-mark">Add observation marker</button></div><ul id="usb-observations" class="usb-observations"></ul><details><summary>Raw USB traffic</summary><pre id="usb-log" class="usb-log" aria-label="Raw USB traffic"></pre></details></details></section>`;
  const $=q=>root.querySelector(q);
  function activeBoards(){const requested=getBoards();return Array.isArray(requested)?BOARDS.filter(board=>requested.includes(board)):[];}
+ function operationBoards(){return singleBoardTarget?[singleBoardTarget]:activeBoards();}
  function activeMaster(){const master=getMaster();return BOARDS.includes(master)&&activeBoards().includes(master)?master:null;}
- function requireBoard(board){if(!activeBoards().includes(board))throw Object.assign(Error('This board is not fitted in the selected locker layout.'),{code:'LAYOUT'});}
+ function requireBoard(board){if(!operationBoards().includes(board))throw Object.assign(Error('This board is not part of the selected test scope.'),{code:'LAYOUT'});}
  function requireCurrentMaster(){const master=activeMaster();if(!master||transport?.masterBoard!==master||connectedBoards.join('')!==activeBoards().join(''))throw Object.assign(Error('The USB connection does not match the selected master and columns. Reconnect using the correct locker layout.'),{code:'LAYOUT'});return master;}
- function refreshLayout(){const select=$('#usb-monitor-board'),previous=select.value,targets=activeBoards();select.innerHTML='<option value="all">All installed boards</option>'+targets.map(board=>`<option value="${board}">Board ${board}</option>`).join('');select.value=targets.includes(previous)?previous:'all';paint();}
+ function refreshLayout(){const select=$('#usb-monitor-board'),previous=select.value,targets=operationBoards();select.innerHTML=`<option value="all">${singleBoardTarget?'Selected board only':'All installed boards'}</option>`+targets.map(board=>`<option value="${board}">Board ${board}</option>`).join('');select.value=targets.includes(previous)?previous:'all';paint();}
  function persist(){onSave(structuredClone(data));}
- function event(e){data.events.push({...e,at:e.at||stamp()});data.events=data.events.slice(-2000);if(e.type==='error'||e.type==='warning'){data.observations.push({at:e.at||stamp(),message:e.message||e.raw||e.code||'USB message'});data.observations=data.observations.slice(-120);}persist();paintLog();}
+ function event(e){data.events.push({...e,...(discovery?{stage:'discovery'}:{}),at:e.at||stamp()});data.events=data.events.slice(-2000);if(e.type==='error'||e.type==='warning'){data.observations.push({at:e.at||stamp(),message:e.message||e.raw||e.code||'USB message'});data.observations=data.observations.slice(-120);}persist();paintLog();}
  function observe(text){data.observations.push({at:stamp(),message:text});data.observations=data.observations.slice(-120);persist();paintLog();}
  function paintLog(){
   $('#usb-log').textContent=data.events.slice(-70).map(e=>`${e.at} ${e.type.toUpperCase()} ${e.command||''} ${e.raw!==undefined?JSON.stringify(e.raw):e.message||e.code||''}`).join('\n')||'No USB traffic recorded.';
@@ -39,8 +41,8 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   $('#usb-monitor').disabled=!controlsEnabled||!connected||(!monitoring&&busy)||!activeBoards().length;
   $('#usb-monitor').textContent=monitoring?'Stop watching':'Watch sensor inputs';$('#usb-monitor-board').disabled=!controlsEnabled||busy||monitoring;
   $('#usb-message').textContent=message;$('#usb-error').textContent=lastError;
-  $('#usb-settings').textContent=`9600 baud · 8N1 · master ${activeMaster()||'not selected'} · USB evidence is included when you save a report`;
-  $('#usb-board-list').innerHTML=activeBoards().map(b=>{const r=data.boards[b];return `<div class="usb-board"><div class="usb-board-heading"><strong>${b}${b===activeMaster()?' · master':''}</strong><span>${r?esc(r.status==='responded'?'Reply received':r.status==='no-response'?'Reply timed out':'Check incomplete'):'Not checked'}</span><small>${r?esc(r.at.slice(11,19))+' · '+(r.elapsedMs??'—')+' ms':''}</small></div><div class="sensor-bits" aria-label="Board ${b} raw sensor inputs">${Array.from({length:16},(_,i)=>{const value=r?.status==='responded'?r.bits?.[15-i]:undefined;return `<span class="sensor-bit ${value==='1'?'one':value==='0'?'zero':''}" title="Input ${i+1}: ${value??'not read'}"><small>${i+1}</small><b>${value??'–'}</b></span>`;}).join('')}</div>${r?.error?`<p class="usb-board-error">${esc(r.error)}</p>`:''}</div>`;}).join('');paintLog();
+  $('#usb-settings').textContent=`9600 baud · 8N1 · ${singleBoardTarget?`single board ${singleBoardTarget}; locker master ${activeMaster()||'not selected'} not confirmed`:`master ${activeMaster()||'not selected'}`} · USB evidence is included when you save a report`;
+  $('#usb-board-list').innerHTML=operationBoards().map(b=>{const r=data.boards[b];return `<div class="usb-board"><div class="usb-board-heading"><strong>${b}${!singleBoardTarget&&b===activeMaster()?' · master':''}</strong><span>${r?esc(r.status==='responded'?'Reply received':r.status==='no-response'?'Reply timed out':'Check incomplete'):'Not checked'}</span><small>${r?esc(r.at.slice(11,19))+' · '+(r.elapsedMs??'—')+' ms':''}</small></div><div class="sensor-bits" aria-label="Board ${b} raw sensor inputs">${Array.from({length:16},(_,i)=>{const value=r?.status==='responded'?r.bits?.[15-i]:undefined;return `<span class="sensor-bit ${value==='1'?'one':value==='0'?'zero':''}" title="Input ${i+1}: ${value??'not read'}"><small>${i+1}</small><b>${value??'–'}</b></span>`;}).join('')}</div>${r?.error?`<p class="usb-board-error">${esc(r.error)}</p>`:''}</div>`;}).join('');paintLog();
  }
  function connectionChanged(state){data.connected=state.connected;persist();const error=intentionalClose?null:state.error;if(state.connected!==lastConnected||error){lastConnected=state.connected;onConnection({connected:state.connected,error});}onBusy(state.busy);if(error){lastError=error.message||'USB connection lost.';message='Reconnect the USB port before continuing. Incomplete checks are not board failures.';stopMonitor();}paint();}
  async function connect(){
@@ -49,13 +51,14 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   const targets=activeBoards(),master=activeMaster();if(!master){lastError='The selected locker layout has not been confirmed. No USB checks are available.';paint();return;}
   connecting=true;lastError='';message=`Select the COM port connected to master ${master}.`;paint();onBusy(true);
   let candidate;
-  try{const port=await navigator.serial.requestPort();if(master!==activeMaster()||targets.join('')!==activeBoards().join(''))throw Error('The locker layout changed during port selection. Choose the port again.');candidate=new SerialTransport(port,{masterBoard:master,onEvent:event,onState:connectionChanged});transport=candidate;connectedBoards=[...targets];await candidate.open();requireCurrentMaster();message=`USB port open. Follow the guide below to reset ${master} and read the board inputs.`;event({type:'info',message:`USB port opened at 9600 baud, 8N1 for master ${master}. Opening a port is not a board reply.`});onConnection({connected:true});}
+  try{const port=await navigator.serial.requestPort();if(master!==activeMaster()||targets.join('')!==activeBoards().join(''))throw Error('The locker layout changed during port selection. Choose the port again.');candidate=new SerialTransport(port,{masterBoard:master,onEvent:event,onState:connectionChanged});transport=candidate;connectedBoards=[...targets];await candidate.open();requireCurrentMaster();message=singleBoardTarget?`USB port open for single board ${singleBoardTarget}. Read its inputs before the door test.`:`USB port open. Follow the guide below to reset ${master} and read the board inputs.`;event({type:'info',message:`USB port opened at 9600 baud, 8N1 for master ${master}. Opening a port is not a board reply.`});onConnection({connected:true});}
   catch(e){await candidate?.close().catch(()=>{});transport=null;connectedBoards=[];if(e.name==='NotFoundError'){message='Port selection cancelled. No board was checked.';}else{lastError=e.message||String(e);message='Could not open the locker COM port. Close the parkIT app and try again.';event({type:'error',code:e.code||e.name,message:lastError});}onConnection({connected:false,error:e.name==='NotFoundError'?null:{code:e.code||'PORT',message:lastError}});}
   finally{connecting=false;onBusy(false);paint();}
  }
  function stopMonitor(){monitoring=false;monitorToken++;onBusy(false);paint();}
  async function disconnect(intentional=true){
   if(disconnecting)return disconnectTask;
+  stopDiscovery();lastDiscovery=null;
   const closingTransport=transport;
   disconnecting=true;intentionalClose=intentional;token++;stopMonitor();onBusy(true);paint();
   disconnectTask=(async()=>{
@@ -76,6 +79,76 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   })();
   return disconnectTask;
  }
+ function stopDiscovery(){
+  if(!discovery)return Promise.resolve([]);
+  discovery.stopped=true;
+  return discovery.done;
+ }
+ function requireDiscoveryContext(run){
+  if(run.stopped||run.token!==token||document.hidden)throw Object.assign(Error('The board address check was stopped.'),{code:'CANCELLED'});
+  if(disconnecting||transport!==run.transport||!run.transport.connected)throw Object.assign(Error('The USB connection changed during the board address check.'),{code:'DISCONNECTED'});
+  if(run.master!==activeMaster()||run.boards!==activeBoards().join('')||singleBoardTarget)throw Object.assign(Error('The locker context changed during the board address check. Repeat it for the selected layout.'),{code:'LAYOUT'});
+ }
+ function discoveryReply(board,reply,started){
+  const raw=typeof reply?.raw==='string'?reply.raw:'';
+  const frames=[...raw.matchAll(/<([A-E])>\s*Ex\(BIN\)\s*:\s*([01]{8})\s*:\s*([01]{8})(?=\s*(?:<[A-E]>|[~\r\n]|$))/gi)];
+  if(reply?.board!==board||reply.status!==undefined&&reply.status!=='responded'||typeof reply.bits!=='string'||!/^[01]{16}$/.test(reply.bits)||!frames.some(frame=>frame[1].toUpperCase()===board&&frame[2]+frame[3]===reply.bits)){
+   throw Object.assign(Error(`No valid addressed input-status reply from ${board} was received during discovery.`),{code:'PROTOCOL',raw});
+  }
+  return{board,status:'responded',bits:reply.bits,raw:raw.slice(-1024),at:typeof reply.at==='string'&&Number.isFinite(Date.parse(reply.at))?new Date(reply.at).toISOString():stamp(),elapsedMs:Number.isFinite(reply.elapsedMs)&&reply.elapsedMs>=0?reply.elapsedMs:Date.now()-started,stage:'discovery'};
+ }
+ async function discoverBoards(){
+  if(singleBoardTarget)throw Object.assign(Error('Discovery cannot widen an adopted single-board test. Start a new report to choose another board.'),{code:'SCOPE'});
+  if(connecting||disconnecting||operation||monitoring||transport?.busy)throw Object.assign(Error('Wait for the current USB check to finish before discovering boards.'),{code:'BUSY'});
+  if(!transport?.connected)throw Object.assign(Error('Connect the locker USB port before discovering boards.'),{code:'DISCONNECTED'});
+  const master=requireCurrentMaster(),results=[];
+  let finish;
+  const run={transport,master,boards:activeBoards().join(''),token:++token,stopped:false,done:new Promise(resolve=>{finish=resolve;})};
+  discovery=run;lastDiscovery=null;operation=true;lastError='';message='Checking board addresses A–E over USB…';onBusy(true);paint();
+  try{
+   for(const board of BOARDS){
+    requireDiscoveryContext(run);
+    const started=Date.now();let result;
+    try{result=discoveryReply(board,await run.transport.query(board),started);}
+    catch(error){result={board,status:error?.code==='TIMEOUT'?'no-response':'error',code:typeof error?.code==='string'?error.code.slice(0,80):'DISCOVERY',error:String(error?.message||error).slice(0,1000),raw:typeof error?.raw==='string'?error.raw.slice(-1024):'',at:stamp(),elapsedMs:Date.now()-started,stage:'discovery'};}
+    results.push(result);data.checks.push(result);data.checks=data.checks.slice(-600);
+    event({type:result.status==='responded'?'info':'warning',...result,command:'ISB#'+board,message:`Discovery ${board}: ${result.status}${result.error?' — '+result.error:''}`});
+    requireDiscoveryContext(run);
+    if(result.status==='error'&&['DISCONNECTED','WRITE','PORT'].includes(result.code))throw Object.assign(Error(result.error),{code:result.code});
+   }
+   lastDiscovery={transport:run.transport,master:run.master,boards:run.boards,results:structuredClone(results)};
+   message='Board address check complete. Valid replies: '+(results.filter(result=>result.status==='responded').map(result=>result.board).join(', ')||'none')+'.';
+   return structuredClone(results);
+  }catch(error){
+   if(error.code!=='CANCELLED')lastError=error.message;
+   message='Board address check stopped. Captured evidence remains in the USB log.';
+   error.results=structuredClone(results);throw error;
+  }finally{
+   if(discovery===run)discovery=null;
+   operation=false;onBusy(false);paint();finish(structuredClone(results));
+  }
+ }
+ function adoptSingleBoard(board){
+  if(!BOARDS.includes(board))throw Object.assign(Error('Choose a discovered board letter from A to E.'),{code:'LAYOUT'});
+  if(connecting||disconnecting||operation||monitoring||transport?.busy)throw Object.assign(Error('Wait for the current USB check to finish before choosing a board.'),{code:'BUSY'});
+  if(!transport?.connected)throw Object.assign(Error('Connect the USB port before choosing the detected board.'),{code:'DISCONNECTED'});
+  const master=requireCurrentMaster();
+  if(singleBoardTarget){
+   if(singleBoardTarget!==board)throw Object.assign(Error('This report is already scoped to another detected board. Start a new report to change it.'),{code:'SCOPE'});
+   return singleBoardTarget;
+  }
+  if(!lastDiscovery||lastDiscovery.transport!==transport||lastDiscovery.master!==master||lastDiscovery.boards!==activeBoards().join('')||!lastDiscovery.results.some(result=>result.board===board&&result.status==='responded'))throw Object.assign(Error('Complete a valid board address check before selecting this board.'),{code:'DISCOVERY'});
+  singleBoardTarget=board;refreshLayout();
+  event({type:'info',stage:'discovery',board,message:`Single-board test selected for ${board}. Expected locker master ${master} remains unconfirmed.`});
+  return singleBoardTarget;
+ }
+ function clear(){
+  if(connecting||disconnecting||operation||monitoring||transport?.busy)throw Object.assign(Error('Wait for USB activity to finish before clearing this test.'),{code:'BUSY'});
+  if(singleBoardTarget&&transport?.connected)throw Object.assign(Error('Disconnect the single-board test before starting a fresh report.'),{code:'SCOPE'});
+  if(!transport?.connected)singleBoardTarget=null;
+  lastDiscovery=null;
+  data={boards:{},lastBits:{},connected:!!transport?.connected,events:[],observations:[],checks:[]};persist();refreshLayout();
+ }
  async function check(board){
   requireBoard(board);
   if(disconnecting||!transport?.connected)throw Object.assign(Error('Connect the locker USB port first.'),{code:'DISCONNECTED'});
@@ -86,7 +159,13 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   }catch(e){result={board,status:e.code==='TIMEOUT'?'no-response':'error',code:e.code||'UNKNOWN',error:e.message,at:stamp(),elapsedMs:Date.now()-started};observe(`Board ${board}: ${e.code==='TIMEOUT'?'no valid reply within the response timeout.':e.message}`);}
   data.boards[board]=result;data.checks.push(result);data.checks=data.checks.slice(-600);persist();paint();return result;
  }
- async function scan(boards=activeBoards(),onResult=()=>{}){
+ async function publicCheck(board){
+  if(operation||monitoring||connecting||disconnecting||transport?.busy)throw Object.assign(Error('Wait for the current USB check to finish.'),{code:'BUSY'});
+  operation=true;onBusy(true);paint();
+  try{return await check(board);}
+  finally{operation=false;onBusy(false);paint();}
+ }
+ async function scan(boards=operationBoards(),onResult=()=>{}){
   if(!Array.isArray(boards)||!boards.length||new Set(boards).size!==boards.length)throw Error('Choose the installed boards for this check.');
   boards.forEach(requireBoard);boards=[...boards];
   if(connecting||disconnecting||operation||monitoring||transport?.busy)throw Error('Stop the current USB check before starting another.');
@@ -95,6 +174,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   finally{operation=false;onBusy(false);paint();}
  }
  async function reset(){
+  if(singleBoardTarget)throw Object.assign(Error('Master reset is unavailable while testing one detected board.'),{code:'SCOPE'});
   const master=requireCurrentMaster();requireBoard(master);
   if(connecting||disconnecting||operation||monitoring||transport?.busy)throw Error('Stop the current USB check first.');
   if(!transport?.connected)throw Error('Connect the locker USB port first.');
@@ -113,7 +193,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
  async function openDoorTest(board,door,{shouldContinue=()=>true,onPhase=()=>{},onSample=()=>{},onCommand=()=>{}}={}){
   if(!Number.isInteger(door)||door<1||door>16)throw Error('Choose a door from 1 to 16.');
   if(transport?.activationBlocked)throw Error(transport.activationBlockReason||'Lock-off transmission was not confirmed. Stop opening doors and record the incomplete tests.');
-  const targets=activeBoards(),master=activeMaster(),mine=beginDoorOperation(board),canContinue=()=>mine===token&&!doorStop&&!document.hidden&&shouldContinue()&&targets.join('')===activeBoards().join('')&&master===activeMaster();
+  const targets=operationBoards(),master=activeMaster(),mine=beginDoorOperation(board),canContinue=()=>mine===token&&!doorStop&&!document.hidden&&shouldContinue()&&targets.join('')===operationBoards().join('')&&master===activeMaster();
   const requireContinue=()=>{if(!canContinue())throw Object.assign(Error('Door check interrupted. No opening will be retried automatically.'),{code:'CANCELLED'});};
   const read=async(phase,value)=>{requireContinue();const result=await check(value);onSample(phase,result);return result;};
   try{
@@ -139,14 +219,14 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   finally{operation=false;onBusy(false);paint();}
  }
  async function readDoorTestInputs(board,{shouldContinue=()=>true,onSample=()=>{}}={}){
-  const targets=activeBoards(),master=activeMaster(),mine=beginDoorOperation(board);
-  try{for(const value of [board,...targets.filter(value=>value!==board)]){if(mine!==token||doorStop||document.hidden||!shouldContinue()||targets.join('')!==activeBoards().join('')||master!==activeMaster())throw Error('Closed-input check interrupted.');onSample(await check(value));}}
+  const targets=operationBoards(),master=activeMaster(),mine=beginDoorOperation(board);
+  try{for(const value of [board,...targets.filter(value=>value!==board)]){if(mine!==token||doorStop||document.hidden||!shouldContinue()||targets.join('')!==operationBoards().join('')||master!==activeMaster())throw Error('Closed-input check interrupted.');onSample(await check(value));}}
   finally{operation=false;onBusy(false);paint();}
  }
  async function toggleMonitor(){
   if(monitoring){stopMonitor();message='Input monitoring stopped.';paint();return;}
   if(connecting||disconnecting||operation||transport?.busy||!transport?.connected)return;
-  const targets=activeBoards(),selected=$('#usb-monitor-board').value;
+  const targets=operationBoards(),selected=$('#usb-monitor-board').value;
   if(!targets.length)throw Error('The selected locker layout has not been confirmed.');
   if(selected!=='all')requireBoard(selected);
   monitoring=true;const mine=++monitorToken;const watchBoards=selected==='all'?targets:[selected];onBusy(true);message='Watching raw sensor inputs. Operate one locker at a time and compare the changes.';$('#usb-live-details').open=true;paint();
@@ -160,8 +240,8 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
  $('#usb-mark').addEventListener('click',()=>observe('Operator marker — compare subsequent sensor readings with the physical locker action.'));
  function showError(e){lastError=e.message;paint();}
  navigator.serial?.addEventListener('disconnect',e=>{if((e.port||e.target)===transport?.port)disconnect(false).catch(showError);});
- document.addEventListener('visibilitychange',()=>{if(document.hidden){stopMonitor();stopDoorTest();}});
- globalThis.addEventListener?.('pagehide',stopDoorTest);
+ document.addEventListener('visibilitychange',()=>{if(document.hidden){stopMonitor();stopDoorTest();stopDiscovery();}});
+ globalThis.addEventListener?.('pagehide',()=>{stopDoorTest();stopDiscovery();});
  persist();refreshLayout();
- return {supported,get connected(){return!!transport?.connected;},get busy(){return connecting||disconnecting||operation||monitoring||!!transport?.busy;},get activationBlocked(){return!!transport?.activationBlocked;},get activationBlockReason(){return transport?.activationBlockReason||'';},get monitoring(){return monitoring;},connect,disconnect,check:async board=>{if(operation||monitoring||connecting||disconnecting)throw Error('Wait for the current USB check to finish.');return check(board);},scan,reset,refreshLayout,openDoorTest,readDoorTestInputs,stopDoorTest,stopMonitor,showError,setControlsEnabled(value){controlsEnabled=!!value;paint();},snapshot:()=>structuredClone(data),clear(){data={boards:{},lastBits:{},connected:!!transport?.connected,events:[],observations:[],checks:[]};persist();paint();}};
+ return {supported,get connected(){return!!transport?.connected;},get busy(){return connecting||disconnecting||operation||monitoring||!!transport?.busy;},get activationBlocked(){return!!transport?.activationBlocked;},get activationBlockReason(){return transport?.activationBlockReason||'';},get monitoring(){return monitoring;},get singleBoardTarget(){return singleBoardTarget;},connect,disconnect,discoverBoards,stopDiscovery,adoptSingleBoard,check:publicCheck,scan,reset,refreshLayout,openDoorTest,readDoorTestInputs,stopDoorTest,stopMonitor,showError,setControlsEnabled(value){controlsEnabled=!!value;paint();},snapshot:()=>structuredClone(data),clear};
 }

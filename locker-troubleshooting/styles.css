@@ -29,3 +29,8 @@
 .before-restart-boards{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin:10px 0}
 .before-restart-boards .choice:has(input:checked){border-color:var(--teal);background:#f1f7f3;box-shadow:0 0 0 1px var(--teal)}
 .setup-fieldset:disabled .choice{cursor:default}
+
+.detected-board-actions{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}
+.detected-board-actions .primary{flex:1 1 190px}
+.single-board-bits{overflow-wrap:anywhere;background:var(--pale);padding:14px 16px;border-radius:8px}
+.single-board-bits code{display:block;font-size:20px;letter-spacing:2px;color:var(--deep);margin-top:6px}

@@ -8,6 +8,7 @@ import * as driveHelpers from '../../locker-troubleshooting/drive-reports.js';
 import * as storageHelpers from '../../locker-troubleshooting/test-storage.js';
 import * as doorTests from '../../locker-troubleshooting/door-test.js';
 import * as layouts from '../../locker-troubleshooting/layouts.js';
+import * as boardDetection from '../../locker-troubleshooting/board-detection.js';
 import {createDoorGuide} from '../../locker-troubleshooting/door-ui.js';
 
 const appUrl=new URL('../../locker-troubleshooting/app.js',import.meta.url);
@@ -91,8 +92,8 @@ class FakeDocument{
 
 function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unexpected automatic Drive save.',holdDoorOpen=false,doorFailure='',doorPreflightFailure='',doorOffFailure=false}={}){
   const document=new FakeDocument(html),microtasks=[],timers=new Map(),windowListeners=new Map();
-  const calls={uuid:0,usbCheck:0,usbScan:0,usbReset:0,usbConnect:0,doorOpen:0,doorRead:0,guidedStart:0,driveSave:0,library:0,reloads:0};
-  const drivePayloads=[],doorTargets=[],scanTargets=[],queryTargets=[],resetTargets=[];
+  const calls={uuid:0,usbCheck:0,usbScan:0,usbReset:0,usbConnect:0,usbDiscover:0,usbStopDiscovery:0,usbAdopt:0,doorOpen:0,doorRead:0,guidedStart:0,driveSave:0,library:0,reloads:0};
+  const drivePayloads=[],doorTargets=[],scanTargets=[],queryTargets=[],resetTargets=[],adoptedBoards=[];
   let timerId=0,releaseDoor,mockUsb,appNow=Date.now();
   const usbData={boards:{},lastBits:{},events:[],checks:[],observations:[],connected:usbConnected};
   const window={
@@ -101,9 +102,9 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   };
   const fire=(type,event={})=>{for(const listener of [...(windowListeners.get(type)||[])])listener({type,...event});};
   class GuidedConnection{
-    constructor(options){this.options=options;}
-    snapshot(){return{phase:'stopped',remainingSeconds:60};}
-    start(){calls.guidedStart++;this.options.probe(this.options.getMaster?.()||'C');}
+    constructor(options){this.options=options;this.current={phase:'stopped',remainingSeconds:60};}
+    snapshot(){return clone(this.current);}
+    start(){calls.guidedStart++;const master=this.options.getMaster?.()||'C';this.current={phase:'waiting',remainingSeconds:60,masterBoard:master,connected:mockUsb.connected,verifiedAt:null,discoveredBoards:[],discoveryResults:[],discoveryAt:'',discoveryRunning:false};this.options.probe(master);}
     retry(){this.start();}
     stop(){}
     notifyConnection(){}
@@ -112,16 +113,31 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     async save(payload){calls.driveSave++;drivePayloads.push(clone(payload));throw Error(driveFailure);}
     openLibrary(){calls.library++;}
   }
-  function mountUsbPanel(root,{onSave,getBoards=()=>flow.BOARDS,getMaster=()=> 'C'}){
+  function mountUsbPanel(root,{onSave,onConnection=()=>{},getBoards=()=>flow.BOARDS,getMaster=()=> 'C'}){
+    let singleBoardTarget=null,lastDiscoveryResults=[];
+    const scopedBoards=()=>singleBoardTarget?[singleBoardTarget]:getBoards();
+    const requireTarget=board=>assert.ok(scopedBoards().includes(board),'USB request remains within the explicitly selected controller scope');
     const usb={connected:usbConnected,supported:true,busy:false,monitoring:false,
-      snapshot:()=>clone(usbData),setControlsEnabled(){},stopMonitor(){},clear(){},showError(){},async disconnect(){},
-      async check(board=getMaster()){assert.ok(getBoards().includes(board));queryTargets.push(board);calls.usbCheck++;return{board,status:'responded',bits:'0'.repeat(16)};},
-      async scan(boards,onResult=()=>{}){calls.usbScan++;scanTargets.push([...boards]);for(const board of boards){assert.ok(getBoards().includes(board));await onResult({board,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:00.000Z'});}},async reset(){calls.usbReset++;resetTargets.push(getMaster());},async connect(){calls.usbConnect++;},refreshLayout(){},
+      get singleBoardTarget(){return singleBoardTarget;},
+      snapshot:()=>clone(usbData),setControlsEnabled(){},stopMonitor(){},clear(){singleBoardTarget=null;lastDiscoveryResults=[];},showError(){},
+      async disconnect(){usb.connected=false;usbData.connected=false;onConnection({connected:false});},
+      async check(board=getMaster()){requireTarget(board);queryTargets.push(board);calls.usbCheck++;return{board,status:'responded',bits:'0'.repeat(16)};},
+      async scan(boards=scopedBoards(),onResult=()=>{}){calls.usbScan++;scanTargets.push([...boards]);for(const board of boards){requireTarget(board);await onResult({board,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:00.000Z'});}},
+      async reset(){if(singleBoardTarget)throw Object.assign(Error('Master reset is unavailable in a single-board check.'),{code:'SCOPE'});calls.usbReset++;resetTargets.push(getMaster());},async connect(){calls.usbConnect++;},refreshLayout(){},
+      async discoverBoards(){calls.usbDiscover++;return clone(lastDiscoveryResults);},
+      async stopDiscovery(){calls.usbStopDiscovery++;return clone(lastDiscoveryResults);},
+      adoptSingleBoard(board){
+        assert.ok(usb.connected,'only a connected port can adopt a detected board');
+        assert.ok(lastDiscoveryResults.some(result=>result.board===board&&result.status==='responded'&&/^[01]{16}$/.test(result.bits)), 'adoption needs a valid reply from this discovered address');
+        assert.ok(!singleBoardTarget||singleBoardTarget===board,'an adopted target cannot silently change');
+        calls.usbAdopt++;adoptedBoards.push(board);singleBoardTarget=board;return board;
+      },
+      setDiscoveryResults(results){lastDiscoveryResults=clone(results);},
       stopDoorTest(){},
       async openDoorTest(board,door,{onPhase,onSample,onCommand}){
         calls.doorOpen++;doorTargets.push({board,door});
         const sample=(value,bits)=>({board:value,status:'responded',bits,at:'2026-11-18T12:00:00.000Z',elapsedMs:5});
-        assert.ok(getBoards().includes(board));for(const value of getBoards())onSample('baseline',sample(value,'0'.repeat(16)));
+        requireTarget(board);for(const value of scopedBoards())onSample('baseline',sample(value,'0'.repeat(16)));
         if(doorPreflightFailure)throw Object.assign(Error(doorPreflightFailure),{code:'BASELINE'});
         onCommand({openAttempted:true,openSent:!doorFailure,offSent:true,offAttempted:true,openAt:'2026-11-18T12:00:00.100Z',offAt:'2026-11-18T12:00:00.600Z',code:doorOffFailure?'LOCK_OFF':'',error:doorOffFailure?'Controller rejected the lock-off command.':''});
         onPhase('Watching the selected column…');
@@ -129,13 +145,13 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
         if(holdDoorOpen)await new Promise(resolve=>{releaseDoor=resolve;});
         if(doorFailure||doorOffFailure)throw Error(doorFailure||'Controller rejected the lock-off command.');
       },
-      async readDoorTestInputs(board,{onSample}){calls.doorRead++;for(const value of getBoards())onSample({board:value,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:01.000Z',elapsedMs:5});},
+      async readDoorTestInputs(board,{onSample}){requireTarget(board);calls.doorRead++;for(const value of scopedBoards())onSample({board:value,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:01.000Z',elapsedMs:5});},
     };
     mockUsb=usb;onSave(clone(usbData));return usb;
   }
   class AppDate extends Date{constructor(...args){super(...(args.length?args:[appNow]));}static now(){return appNow;}}
   const setTimer=callback=>{const id=timerId++;timers.set(id,callback);return id;};
-  const context=vm.createContext({...flow,...records,...driveHelpers,...storageHelpers,...doorTests,...layouts,
+  const context=vm.createContext({...flow,...records,...driveHelpers,...storageHelpers,...doorTests,...layouts,...boardDetection,
     // Production ESM modules share a realm. Normalize the VM/host boundary here
     // so its plain step-log objects reach the real validator as plain objects.
     createReportRecord:(session,options)=>records.createReportRecord(structuredClone(session),options),
@@ -148,9 +164,9 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   });
   function flush(){for(let runs=0;microtasks.length;runs++){assert.ok(runs<100,'boot microtasks must settle');microtasks.shift()();}}
   new vm.Script(appSource,{filename:appUrl.pathname}).runInContext(context);flush();
-  const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,beforeRestart:s.beforeRestart,initial:s.initial,recheck:s.recheck,doorTests:s.doorTests,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
+  const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,beforeRestart:s.beforeRestart,boardDetection:s.boardDetection,initial:s.initial,recheck:s.recheck,doorTests:s.doorTests,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
   const earlierPageFixture="s.beforeRestart={communication:'unsure',unresponsiveBoards:[],notes:'Fixture begins after the earlier observation page.',recordedAt:s.started};";
-  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,scanTargets,queryTargets,resetTargets,
+  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,scanTargets,queryTargets,resetTargets,adoptedBoards,
     enterBeforeRestart(capacity='80',setup='flat-input-sense',{connected=false}={}){this.chooseCapacity(capacity);this.click('next');this.chooseConfiguration(setup);if(connected){mockUsb.connected=true;usbData.connected=true;}this.click('next');assert.equal(state().step,'before-restart');},
     enterDoorStep(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('doors','Test fixture completed communication checks')",context);flush();},
     enterInitialCheck(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('initial','Test fixture completed connection check')",context);flush();},
@@ -159,7 +175,12 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     timerCount(){return timers.size;},
     advanceAppTime(ms){appNow+=ms;},
     finding:()=>JSON.parse(vm.runInContext('JSON.stringify(outcome(s))',context)),
-    readyConnection(master){context.fixtureMaster=master;vm.runInContext("connection.snapshot=()=>({phase:'ready',masterBoard:fixtureMaster,connected:true,verifiedAt:1});render()",context);flush();},
+    readyConnection(master){context.fixtureMaster=master;vm.runInContext("connection.current={phase:'ready',masterBoard:fixtureMaster,connected:true,verifiedAt:1};render()",context);flush();},
+    foundBoards(results,{master='C',at}={}){
+      mockUsb.setDiscoveryResults(results);context.fixtureDiscovery=clone(results);context.fixtureMaster=master;context.fixtureDiscoveryAt=at||new Date(appNow).toISOString();
+      vm.runInContext("connection.current={phase:'attention',reason:'different-board',masterBoard:fixtureMaster,connected:usb.connected,verifiedAt:null,goodReplyCount:0,remainingSeconds:0,discoveredBoards:fixtureDiscovery.filter(result=>result.status==='responded'&&/^[A-E]$/.test(result.board)&&/^[01]{16}$/.test(result.bits)).map(result=>result.board),discoveryResults:fixtureDiscovery,discoveryAt:fixtureDiscoveryAt,discoveryRunning:false};guidedChanged()",context);flush();
+    },
+    async disconnectUsb(){await mockUsb.disconnect();flush();},
     releaseDoor(){releaseDoor?.();},
     change(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI input exists: '+id);element.value=value;element.dispatch('change');flush();},
     type(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI field exists: '+id);element.value=value;element.dispatch('input');flush();},
@@ -184,7 +205,13 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
 }
 
 function noAutomaticIO(app){
-  for(const key of ['usbCheck','usbScan','usbReset','usbConnect','doorOpen','doorRead','guidedStart','driveSave','library'])assert.equal(app.calls[key],0,key);
+  for(const key of ['usbCheck','usbScan','usbReset','usbConnect','usbDiscover','usbAdopt','doorOpen','doorRead','guidedStart','driveSave','library'])assert.equal(app.calls[key],0,key);
+}
+
+function discoveryResults(...responders){
+  return flow.BOARDS.map(board=>responders.includes(board)
+    ?{board,status:'responded',bits:'0000000011111111',raw:`<${board}>Ex(BIN):00000000:11111111~`,at:'2026-11-18T12:00:00.000Z',elapsedMs:10,stage:'discovery'}
+    :{board,status:'no-response',code:'TIMEOUT',error:'No valid reply before the timeout.',at:'2026-11-18T12:00:00.000Z',elapsedMs:1500,stage:'discovery'});
 }
 
 function freshWelcome(app,oldIds=[]){
@@ -194,6 +221,7 @@ function freshWelcome(app,oldIds=[]){
   assert.equal(app.document.querySelector('#next').disabled,true,'a fresh test requires a capacity choice');
   assert.deepEqual(state.initial,{});assert.deepEqual(state.recheck,{});
   assert.deepEqual(state.beforeRestart,{communication:'',unresponsiveBoards:[],notes:'',recordedAt:''});
+  assert.deepEqual(state.boardDetection,{attempts:[],selection:null,checks:[]});
   assert.deepEqual(state.history,[]);assert.deepEqual(state.log,[]);
   assert.equal(state.pending,null);assert.equal(state.saved,null);assert.equal(state.recovery,null);
   assert.match(state.id,/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -724,4 +752,120 @@ test('changing capacity before confirmation clears stale column choices but reta
   assert.deepEqual(app.document.querySelectorAll('[name="pre-restart-board"]').map(element=>element.value),['A','B']);
   app.beforeBoard('A');assert.equal(app.document.querySelector('#next').disabled,false);
   assert.deepEqual(app.state().beforeRestart.unresponsiveBoards,['A']);noAutomaticIO(app);
+});
+
+test('detecting A under expected master C requires an explicit single-board choice and never sends RST',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true});app.enterConnection('80');await app.settle();
+  const before=app.calls.usbCheck;app.foundBoards(discoveryResults('A'));
+  assert.equal(app.state().step,'connect');assert.equal(app.document.querySelector('#next').disabled,true);
+  assert.deepEqual(app.document.querySelectorAll('[data-use-detected-board]').map(element=>element.dataset.useDetectedBoard),['A']);
+  assert.equal(app.calls.usbAdopt,0);assert.equal(app.calls.usbCheck,before);assert.equal(app.calls.usbReset,0);
+  app.click('next');assert.equal(app.state().step,'connect');
+  app.selectData('data-use-detected-board','A');await app.settle();
+  assert.equal(app.state().step,'single-board');assert.deepEqual(app.adoptedBoards,['A']);
+  assert.equal(app.state().boardDetection.selection.board,'A');assert.equal(app.state().boardDetection.selection.expectedMaster,'C');
+  assert.deepEqual(app.state().doorTests.targets,['A']);assert.equal(app.state().doorTests.master,null);assert.equal(app.state().doorTests.scope,'board');
+  assert.deepEqual(app.queryTargets,['C','A']);assert.equal(app.calls.usbReset,0);assert.equal(app.calls.usbScan,0);
+  assert.equal(app.document.querySelector('#next').disabled,false);
+  app.click('next');assert.equal(app.state().step,'doors');
+  assert.deepEqual(app.document.querySelectorAll('[data-door-bank]').map(element=>element.dataset.doorBank),['A']);
+  assert.doesNotMatch(app.document.querySelector('#door-guide').innerHTML,/<b>A · master<\/b>/);
+  assert.equal(app.calls.doorOpen,0,'selecting an address never opens a door');
+  app.selectData('data-door-setup','original');app.change('door-number','3');app.check('door-ready');
+  app.click('door-open');await app.settle();
+  assert.deepEqual(app.doorTargets,[{board:'A',door:3}]);assert.equal(app.calls.usbReset,0);
+  app.selectData('data-door-answer','opened:yes');app.click('door-read-closed');await app.settle();
+  app.selectData('data-door-answer','closed:yes');app.click('door-complete');app.click('next');
+  assert.equal(app.state().step,'result');assert.match(app.document.querySelector('#step').innerHTML,/single.board|one board|limited/i);
+});
+
+test('an E response outside the 32-bay A,B layout is usable only after explicit limited-scope selection',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true});app.enterConnection('32');await app.settle();
+  app.foundBoards(discoveryResults('E'),{master:'B'});
+  assert.equal(app.document.querySelector('#next').disabled,true);assert.equal(app.calls.usbAdopt,0);
+  assert.deepEqual(app.queryTargets,['B']);assert.deepEqual(app.state().doorTests.targets,['A','B']);
+  app.selectData('data-use-detected-board','E');await app.settle();
+  assert.equal(app.state().step,'single-board');assert.deepEqual(app.adoptedBoards,['E']);
+  assert.equal(app.state().details.lockerCapacity,'32');assert.equal(app.state().boardDetection.selection.expectedMaster,'B');
+  assert.deepEqual(app.state().doorTests.targets,['E']);assert.equal(app.state().doorTests.master,null);
+  assert.deepEqual(app.queryTargets,['B','E']);assert.deepEqual(app.resetTargets,[]);
+  app.click('next');assert.equal(app.state().step,'doors');
+  assert.deepEqual(app.document.querySelectorAll('[data-door-bank]').map(element=>element.dataset.doorBank),['E']);
+  app.selectData('data-door-setup','original');app.change('door-number','16');app.check('door-ready');
+  app.click('door-open');await app.settle();assert.deepEqual(app.doorTargets,[{board:'E',door:16}]);
+  assert.equal(app.calls.usbReset,0);assert.equal(app.calls.usbScan,0);
+});
+
+test('multiple responding addresses remain separate choices and select only the clicked controller',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true});app.enterConnection('80');await app.settle();
+  app.foundBoards(discoveryResults('A','E'));
+  assert.deepEqual(app.document.querySelectorAll('[data-use-detected-board]').map(element=>element.dataset.useDetectedBoard),['A','E']);
+  assert.equal(app.calls.usbAdopt,0);assert.equal(app.document.querySelector('#next').disabled,true);
+  app.selectData('data-use-detected-board','E');await app.settle();
+  assert.deepEqual(app.adoptedBoards,['E']);assert.deepEqual(app.queryTargets,['C','E']);
+  assert.deepEqual(app.state().doorTests.targets,['E']);assert.equal(app.calls.usbReset,0);
+});
+
+test('Back after explicit adoption retains the limited scope and never restarts the expected-master probe',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true});app.enterConnection('80');await app.settle();
+  app.foundBoards(discoveryResults('A'));app.selectData('data-use-detected-board','A');await app.settle();
+  assert.equal(app.state().step,'single-board');const checks=app.calls.usbCheck,starts=app.calls.guidedStart;
+  app.click('back');await app.settle();
+  assert.equal(app.state().step,'connect');assert.equal(app.calls.guidedStart,starts);assert.equal(app.calls.usbCheck,checks);
+  assert.equal(app.document.querySelectorAll('[data-use-detected-board]').length,0);
+  assert.equal(app.state().boardDetection.selection.board,'A');
+  app.click('next');await app.settle();assert.equal(app.state().step,'single-board');
+  assert.deepEqual(app.queryTargets,['C','A','A']);assert.deepEqual(app.adoptedBoards,['A']);
+  assert.equal(app.calls.usbReset,0);assert.equal(app.calls.usbScan,0);assert.equal(app.calls.doorOpen,0);
+});
+
+test('retry, Back and stale discovery buttons cannot silently select a controller',async()=>{
+  for(const action of ['retry','back','disconnected','superseded']){
+    const app=boot(new MemoryStorage(),{usbConnected:true});app.enterConnection('80');await app.settle();
+    app.foundBoards(discoveryResults('A'));
+    const stale=app.document.querySelector('[data-use-detected-board="A"]');assert.ok(stale);
+    const checks=app.calls.usbCheck;
+    if(action==='retry')app.click('retry-connection');
+    if(action==='back')app.click('back');
+    if(action==='disconnected')await app.disconnectUsb();
+    if(action==='superseded'){app.advanceAppTime(1000);app.foundBoards(discoveryResults('E'));}
+    stale.click();await app.settle();
+    assert.equal(app.calls.usbAdopt,0,action);assert.equal(app.calls.usbReset,0,action);assert.equal(app.calls.doorOpen,0,action);
+    assert.ok(!app.state().boardDetection.selection,action);
+    assert.equal(app.calls.usbCheck,checks+(action==='retry'?1:0),action);
+  }
+});
+
+test('discovery rendering and photographs record evidence without adopting or performing more USB work',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true});app.enterConnection('80');await app.settle();
+  const before={checks:app.calls.usbCheck,scans:app.calls.usbScan,resets:app.calls.usbReset,opens:app.calls.doorOpen};
+  app.foundBoards(discoveryResults('A'));
+  const observed=app.state().boardDetection;assert.ok(observed);
+  app.click('zoom-photo');app.click('close-photo');app.change('reference-setup','individual-wires');
+  assert.deepEqual(app.state().boardDetection,observed);assert.equal(app.calls.usbAdopt,0);
+  assert.deepEqual({checks:app.calls.usbCheck,scans:app.calls.usbScan,resets:app.calls.usbReset,opens:app.calls.doorOpen},before);
+  app.click('save-report');await app.settle();
+  const frozen=app.state().pending;assert.ok(frozen);assert.deepEqual(frozen.session.boardDetection,observed);
+  const reopened=boot(app.storage);freshWelcome(reopened,[frozen.id]);
+  reopened.click('recover-reports');await reopened.openRecovery(frozen.id);
+  assert.deepEqual(reopened.state().pending.session.boardDetection,observed);noAutomaticIO(reopened);
+});
+
+test('a saved limited-board report freezes the discovery and original expected-master context without replaying USB work',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true});app.enterConnection('80');await app.settle();
+  app.foundBoards(discoveryResults('A'));app.selectData('data-use-detected-board','A');await app.settle();
+  app.click('next');assert.equal(app.state().step,'doors');
+  app.type('door-remaining-reason','Physical opening deferred after confirming the detected address.');app.click('door-skip-remaining');
+  app.click('next');assert.equal(app.state().step,'result');app.click('save-result');await app.settle();
+  const frozen=app.state().pending;assert.ok(frozen);
+  assert.equal(frozen.session.boardDetection.selection.board,'A');assert.equal(frozen.session.boardDetection.selection.expectedMaster,'C');
+  assert.deepEqual(frozen.session.doorTests.targets,['A']);assert.equal(frozen.session.doorTests.master,null);
+  assert.match(frozen.reportText,/single.board|limited|one board/i);
+  assert.match(frozen.reportText,/expected[^\n]*C|master[^\n]*C/i);
+  assert.doesNotMatch(frozen.reportText,/Master board: A|A \(master\)|RST#A/);
+  assert.deepEqual(app.resetTargets,[]);assert.equal(app.calls.doorOpen,0);
+  const originalText=frozen.reportText,reopened=boot(app.storage);freshWelcome(reopened,[frozen.id]);
+  reopened.click('recover-reports');await reopened.openRecovery(frozen.id);
+  assert.equal(reopened.state().pending.reportText,originalText);
+  assert.deepEqual(reopened.state().pending.session.boardDetection,frozen.session.boardDetection);noAutomaticIO(reopened);
 });

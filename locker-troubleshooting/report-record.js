@@ -1,6 +1,7 @@
-import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-before-restart';
-import {validateDoorTests,hasDoorTestData} from './door-test.js?v=20261118-master';
+import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-detect';
+import {validateDoorTests,hasDoorTestData,getDoorScope,getDoorTargets} from './door-test.js?v=20261118-detect';
 import {validateBeforeRestart} from './before-restart.js?v=20261118-before-restart';
+import {validateBoardDetection,detectedSelection,detectionHasData} from './board-detection.js?v=20261118-detect';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fields = ['id', 'savedAt', 'title', 'location', 'technician', 'reportText'];
@@ -21,6 +22,14 @@ function validateCapacity(details) {
   const value=details?.lockerCapacity;
   if(value!==undefined&&(typeof value!=='string'||!['',...LOCKER_CAPACITIES.map(option=>option.id)].includes(value))) {
     invalid('session.details.lockerCapacity must be blank, 80, 64 or 32 as text.');
+  }
+}
+
+function validateDetectionContext(session){
+  validateBoardDetection(session.boardDetection);
+  if(session.doorTests&&getDoorScope(session.doorTests)==='board'){
+    const selected=detectedSelection(session);
+    if(!selected||getDoorTargets(session.doorTests)[0]!==selected)invalid('board-scoped door evidence needs its matching confirmed detection selection.');
   }
 }
 
@@ -87,6 +96,7 @@ function validateSession(session) {
   // drafts. Current-layout completion is checked by the workflow, not by a save.
   validateDoorTests(session.doorTests);
   validateBeforeRestart(session.beforeRestart);
+  validateDetectionContext(session);
 }
 
 function clone(value) {
@@ -140,6 +150,7 @@ export function payloadForDrive(record) {
   // locker. Retrying its frozen text must not reassign or erase those targets.
   validateDoorTests(record.session.doorTests);
   validateBeforeRestart(record.session.beforeRestart);
+  validateDetectionContext(record.session);
   // Retries send exactly the saved text. Never regenerate an old report using a
   // newer outcome/formatter, which may legitimately use different wording.
   return Object.fromEntries(fields.map(key => [key, record[key]]));
@@ -153,6 +164,7 @@ function hasEntries(value) {
 
 export function hasReportData(session) {
   if (!isObject(session)) return false;
+  if(detectionHasData(session.boardDetection))return true;
   if (session.beforeRestart !== undefined) {
     try { validateBeforeRestart(session.beforeRestart); }
     catch { return true; } // Malformed evidence must never be silently discarded.
