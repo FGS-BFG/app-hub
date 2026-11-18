@@ -1,4 +1,5 @@
 import {codes,parseInput,autoPolarity,isOpen,wait,SerialTransport} from './protocol.js?v=3';
+import {verifyLockClear} from '../locker-lock-clear.js?v=1';
 const $=id=>document.getElementById(id), masters=Array.from({length:4},(_,i)=>({index:i,transport:null,running:false,active:new Map(),calls:0,passed:0,failed:0,score:0,logs:[]}));
 let running=false,stopping=false,settings=null,allLogs=[],loopPromises=[];
 function log(m,msg){const line=new Date().toLocaleTimeString()+(m?' · Master '+(m.index+1):'')+' · '+msg;allLogs.push(line);if(allLogs.length>3000)allLogs.shift();$('log').textContent=allLogs.slice(-160).join('\n');$('log').scrollTop=$('log').scrollHeight}
@@ -11,7 +12,19 @@ async function connectUsb(m){let transport=null;try{const port=await navigator.s
 
 class Simulator {
  constructor(){this.connected=true;this.isSimulator=true;this.states={};this.outputs=new Set()}
- async command(command){if(!this.connected)throw Error('Simulator disconnected');await wait(5);if(command==='LC'){this.outputs.clear();return 'Lock Cleared\r'}const poll=command.match(/^ISB#([A-E])$/);if(poll){const bits=this.states[poll[1]]||'1'.repeat(16);return `<${poll[1]}> (BIN):${bits.slice(0,8)}:${bits.slice(8)}\r`}const action=command.match(/^(LM|LO)([0-9A-F])#([A-E])$/);if(action){const key=action[3]+':'+codes.indexOf(action[2]);if(action[1]==='LM')this.outputs.add(key);else this.outputs.delete(key);return 'OK\r'}throw Error('Unknown simulator command')}
+ async command(command){
+  if(!this.connected)throw Error('Simulator disconnected');await wait(5);
+  if(command==='LC'){this.outputs.clear();return ''}
+  const latch=command.match(/^LRS#([A-E])$/);
+  if(latch){
+   const board=latch[1];
+   const bits=Array.from({length:16},(_,bit)=>this.outputs.has(board+':'+(15-bit))?'1':'0');
+   return `<${board}>Lock Word:${bits.join('')}\n\r`;
+  }
+  const poll=command.match(/^ISB#([A-E])$/);if(poll){const bits=this.states[poll[1]]||'1'.repeat(16);return `<${poll[1]}> (BIN):${bits.slice(0,8)}:${bits.slice(8)}\r`}
+  const action=command.match(/^(LM|LO)([0-9A-F])#([A-E])$/);if(action){const key=action[3]+':'+codes.indexOf(action[2]);if(action[1]==='LM')this.outputs.add(key);else this.outputs.delete(key);return 'OK\r'}
+  throw Error('Unknown simulator command')
+ }
  async close(){this.connected=false}
  toggleDoor(board,index){const bits=(this.states[board]||'1'.repeat(16)).split('');bits[15-index]=bits[15-index]==='1'?'0':'1';this.states[board]=bits.join('')}
 }
@@ -19,8 +32,16 @@ class Simulator {
 function renderSimDoors(){const m=masters[+$('simMaster').value],b=$('simBoard').value,bits=m.transport?.isSimulator?(m.transport.states[b]||'1'.repeat(16)):null;[...$('simDoors').children].forEach((button,i)=>{button.disabled=!bits;const open=bits?.[15-i]==='0';button.classList.toggle('on',!!open);button.textContent=`Door ${i+1}${open?' OPEN':''}`})}
 
 function values(){const v={mode:$('mode').value,boards:[...document.querySelectorAll('#boards input:checked')].map(x=>x.value),gap:+$('gap').value,pulse:+$('pulse').value,openTimeout:+$('openTimeout').value,closeTimeout:+$('closeTimeout').value,cycles:+$('cycles').value,maximum:+$('maximum').value,recovery:+$('recovery').value,recoveryPulse:+$('recoveryPulse').value,fallback:$('polarity').value};for(const [name,min,max] of [['gap',10,10000],['pulse',10,10000],['openTimeout',1,600],['closeTimeout',1,600],['cycles',1,1000],['maximum',1,600],['recovery',1,599],['recoveryPulse',1,60]])if(!Number.isInteger(v[name])||v[name]<min||v[name]>max)throw Error('Invalid setting: '+name);if(v.recovery>=v.maximum)throw Error('Recovery must begin before maximum lock-on time');if(!v.boards.length)throw Error('Select at least one board');return v}
-async function cmd(m,command,pattern){m.calls++;metrics();try{return await m.transport.command(command,pattern,1500,()=>!/^LM/.test(command)||(running&&!stopping))}catch(e){m.failed++;metrics();throw e}}
-async function clear(m){await cmd(m,'LC',/Lock Cleared/i);m.active.clear();log(m,'All locks cleared')}
+async function cmd(m,command,pattern){m.calls++;metrics();try{return await m.transport.command(command,pattern,1500,()=>!/^LM/.test(command)||(running&&!stopping&&!m.clearing))}catch(e){m.failed++;metrics();throw e}}
+async function clear(m){
+ if(m.clearing)return m.clearing;
+ m.clearing=verifyLockClear((...args)=>cmd(m,...args),settings.boards);
+ try{
+  await m.clearing;
+  m.active.clear();
+  log(m,'Lock outputs off on boards '+settings.boards.join(', '));
+ }finally{m.clearing=null}
+}
 async function poll(m,b){const reply=await cmd(m,'ISB#'+b,new RegExp('<'+b+'>[^\\r\\n]*\\(BIN\\):[01]{8}:[01]{8}','i'));const bits=parseInput(b,reply),prev=m.bits[b];m.bits[b]=bits;if(prev&&prev!==bits)for(let i=0;i<16;i++)if(bits[15-i]!==prev[15-i])log(m,`Board ${b}, door ${i+1}: ${isOpen(bits,i,m.polarity)?'OPEN':'CLOSED'}`);return bits}
 async function on(m,b,i){if(!running||stopping)throw Error('Test stopped');await cmd(m,'LM'+codes[i]+'#'+b,null);if(stopping){await clear(m);throw Error('Test stopped during lock command')}m.active.set(b+':'+i,{b,i,since:Date.now()});log(m,`Board ${b}, lock ${i+1} ON`)}
 async function off(m,b,i){const remaining=[...m.active.values()].filter(a=>a.b!==b||a.i!==i);await clear(m);for(const a of remaining){if(stopping||!running)break;await cmd(m,'LM'+codes[a.i]+'#'+a.b,null);if(stopping){await clear(m);break}m.active.set(a.b+':'+a.i,a)}log(m,`Board ${b}, lock ${i+1} OFF`)}
