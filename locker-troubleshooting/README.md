@@ -4,11 +4,11 @@ The maintained source and authenticated Google Drive backend are in the private 
 
 Use **Save to Drive** to freeze a report and save it through the authenticated Google portal. **Saved reports** opens the central library. **New report** starts a blank report after the current report is confirmed in Drive. Failed saves keep the same frozen report for retry. **Download copy** is separate from central saving.
 
-Reports belong in **1-Current productions → Field reports**. The portal uses the accessing user's Google permissions. Initial Google authorization and Drive API enablement are still pending verification; a real central save has not yet been confirmed.
+Reports belong in **1-Current productions → Field reports**. The portal uses the accessing user's Google permissions. The existing endpoint was updated to version 2 on 18 November 2026 at 08:17 Europe/London. Google authorization, a real save from the public guide in Chrome, and a library read succeeded with an FGS Workspace account. The guide displayed the saved report as read-only. No USB hardware was connected. Live retry behavior and permissions for other users remain unverified.
 
-Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Close the other locker applications, select **Connect locker USB**, then choose master C's COM port.
+Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Close the other locker applications, then select master C's COM port when prompted.
 
-The guide walks through the mains cycle, master reset, five-board ISB checks, physical self-test and connection comparisons. It can monitor raw sensor inputs on one board or all five, and download a report with timestamps and raw USB traffic. Session data stays in that browser until downloaded.
+The guide walks through the mains cycle, master reset, five-board ISB checks, physical self-test and connection comparisons. It can monitor raw sensor inputs on one board or all five, and save a report with timestamps and raw USB traffic to Drive. Browser storage retains drafts and pending retries; a central save is confirmed by the Drive receipt.
 
 ## Guided procedure
 
@@ -40,6 +40,6 @@ node --check locker-troubleshooting/app.js
 
 Open `http://127.0.0.1:8765/locker-troubleshooting/` for a local preview. `app.js` connects the prompts to `usb-ui.js`; `flow.js` owns decisions and reports; `serial.js` handles Web Serial and framing. Photos and the original manual Word procedure are bundled in `assets/`.
 
-The tests cover decision paths, reports, input mapping and mock serial streams. Browser integration checks used simulated USB replies, timeouts, malformed data, sensor changes and disconnection. Physical locker operation still needs validation.
+The tests cover decision paths, reports, input mapping and mock serial streams. Browser USB checks used simulated replies, timeouts, malformed data, sensor changes and disconnection. A real authenticated Drive save and library read are verified with an FGS Workspace account. Physical locker operation, live retries and access with other Google accounts still need validation.
 
 This directory owns the GitHub Pages copy. The earlier private Sites version is separate and does not update automatically.
