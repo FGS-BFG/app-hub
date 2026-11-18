@@ -2,28 +2,28 @@ import {BOARDS,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbo
 import {mountUsbPanel} from './usb-ui.js?v=20261117-drive';
 import {GuidedConnection,shouldProceed} from './guided-connection.js?v=20261117-drive';
 import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js';
-import {DriveReportClient,validateSaveResult,buildReportPayload} from './drive-reports.js';
+import {DriveReportClient,buildReportPayload,validateSaveResult} from './drive-reports.js';
 import {FIELD_REPORTS} from './drive-config.js';
+import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js';
 
-const KEY='fgs-mci-guided-usb-v4';
-const PENDING_KEY=KEY+'-pending-report',SAVED_KEY=KEY+'-saved-report';
 const drive=new DriveReportClient({endpoint:FIELD_REPORTS.endpoint});
 let checksPaused=false;
 let reportMode='live',pendingRecord=null,savedRecord=null,savedReceipt=null,reportError='',cacheError='';
+let recoveryContext=null,recoveryEntries=[];
+const volatilePending=new Map();
 const stages={welcome:0,power:0,startup:0,connect:0,reset:0,initial:1,selftest:1,retry:2,recheck:2,select:2,connector:2,swap:2,cable:2,result:3};
 const $=q=>document.querySelector(q);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let s=freshSession(),restored=false,usb,connection;
-try{const saved=JSON.parse(localStorage.getItem(KEY));if(saved?.version===1&&Object.hasOwn(stages,saved.step)){s={...s,...saved,details:{...s.details,...saved.details}};for(const key of ['initial','recheck','swapped'])if(!s[key]||typeof s[key]!=='object')s[key]={};if(!Array.isArray(s.log))s.log=[];if(!Array.isArray(s.history))s.history=[];restored=true;}}catch{}
-const restoredDraftId=s.reportId;
-s.reportId||=crypto.randomUUID();
-restoreReportView();
+// A page opening is always a new physical test. Older browser records are
+// available only through explicit, read-only recovery; never replay their step.
+let s=freshSession(),usb,connection;
+s.reportId=crypto.randomUUID();
 let entry=0,attempted=-1,checking=false,resetComplete=-1,physicalDone=false,readingBoard='',photo='master';
 let selftestDeadline=0,selftestTimer=null,advancePending=false;
 const snapshot=()=>connection?.snapshot()||{phase:'waiting',remainingSeconds:60};
 function cacheSet(key,value){try{const text=JSON.stringify(value);localStorage.setItem(key,text);if(localStorage.getItem(key)!==text)throw Error('The browser did not retain the report.');return true;}catch{cacheError='This browser cannot keep a local retry copy. Keep this page open and download a copy. Saving to Google Drive can still be attempted.';return false;}}
-function cacheRemove(key){try{localStorage.removeItem(key);return true;}catch{cacheError='The current report is saved, but this browser could not finish clearing its old cache.';return false;}}
-function save(){const ok=cacheSet(KEY,s);if(!ok)$('#storage-label').textContent='Browser progress could not be saved';return ok;}
+function cacheRemove(key){try{localStorage.removeItem(key);return true;}catch{cacheError='This browser could not update its local test storage.';return false;}}
+function save(){const ok=hasReportData(s)?cacheSet(draftKey(s.reportId),s):cacheRemove(draftKey(s.reportId));if(!ok)$('#storage-label').textContent='Browser progress could not be saved';return ok;}
 function record(label){if(reportMode!=='live')return;s.log.push({at:new Date().toISOString(),label});save();}
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),2400);}
 function clearComparison(){s.affected='';s.neighbor='';s.swapped={};s.cable='';s.acknowledged=false;}
@@ -33,7 +33,7 @@ function go(step,label){if(reportMode!=='live')return;advancePending=false;conne
 function enterStep(){if(reportMode!=='live'||checksPaused)return;if(s.step==='connect'){connection.start();connection.notifyConnection(usb.connected);}else queueMicrotask(maybeRunStep);}
 function maybeRunStep(){if(reportMode!=='live'||checksPaused||!usb?.connected||!idle()||attempted===entry)return;if(['reset','retry'].includes(s.step)){attempted=entry;sendReset();}else if(['initial','recheck'].includes(s.step)){attempted=entry;runChecks(s.step,BOARDS);}}
 function canProceed(){if(reportMode!=='live'||checksPaused)return false;if(s.step==='connect')return !checking&&!advancePending&&usb.connected&&shouldProceed(snapshot());if(!idle())return false;if(['reset','retry'].includes(s.step))return usb.connected&&resetComplete===entry;if(s.step==='connector')return true;if(['swap','cable'].includes(s.step)&&!physicalDone)return usb.connected;if(['initial','recheck','swap','cable'].includes(s.step)&&Object.keys(s.checkErrors||{}).length)return false;return validateStep(s);}
-function nextLabel(){if(s.step==='welcome')return restored?'Continue the guide':'Start the guide';if(s.step==='swap'&&!physicalDone)return 'Connections swapped · Next';if(s.step==='cable'&&!physicalDone)return 'Cable replaced · Next';return 'Next';}
+function nextLabel(){if(s.step==='welcome')return 'Start the guide';if(s.step==='swap'&&!physicalDone)return 'Connections swapped · Next';if(s.step==='cable'&&!physicalDone)return 'Cable replaced · Next';return 'Next';}
 function actions(){return `<div class="step-actions"><button id="back" class="back" ${s.history.length&&idle()?'':'disabled'}>← Back</button><button id="next" class="primary" ${canProceed()?'':'disabled'}>${nextLabel()} <span aria-hidden="true">→</span></button></div>`;}
 function note(text){return `<div class="note">${text}</div>`;}
 function success(title,text){return `<div class="guide-status good"><span aria-hidden="true">✓</span><div><strong>${title}</strong><p>${text}</p></div></div>`;}
@@ -113,9 +113,40 @@ function download(){downloadText(reportMode==='live'?report(s):(pendingRecord||s
 function downloadText(text){if(!text)return;const record=pendingRecord||savedRecord;const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='locker-check-'+(record?.savedAt||new Date().toISOString()).slice(0,10)+'.txt';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Copy downloaded. Drive saving is separate.');}
 
 function freezeRecord(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){for(const child of Object.values(value))freezeRecord(child);Object.freeze(value);}return value;}
-function restoreReportView(){
- try{const raw=localStorage.getItem(PENDING_KEY);if(raw){const record=JSON.parse(raw);payloadForDrive(record);if(!restoredDraftId||record.id===restoredDraftId){pendingRecord=freezeRecord(record);reportMode='pending';}}}catch{reportError='The stored pending report could not be read. The current draft has been retained.';}
- try{const raw=localStorage.getItem(SAVED_KEY);if(raw){const data=JSON.parse(raw);payloadForDrive(data.record);const receipt=validateSaveResult(data.receipt,data.record.id.toLowerCase());if((!restoredDraftId||data.record.id===restoredDraftId)&&(!pendingRecord||pendingRecord.id===data.record.id&&pendingRecord.reportText===data.record.reportText)){savedRecord=freezeRecord(data.record);savedReceipt=freezeRecord(receipt);pendingRecord=null;reportMode='saved';}}}catch{if(reportMode!=='pending')reportError='The saved report receipt could not be restored. Open Saved reports to check Google Drive.';}
+function showUnfinishedTests(){
+ if(['saving','changing'].includes(reportMode)||!ioIdle())return;
+ let recovery={entries:[],unreadable:true};
+ try{recovery=readRecoverableTests(localStorage);}catch{}
+ const currentIds=new Set([s.reportId,(pendingRecord||savedRecord)?.id].filter(Boolean).map(id=>id.toLowerCase()));
+ const recovered=new Map(recovery.entries.map(item=>[item.id.toLowerCase(),item]));
+ for(const record of volatilePending.values())recovered.set(record.id.toLowerCase(),{id:record.id,kind:'pending',record,location:record.location,technician:record.technician,at:record.savedAt});
+ recoveryEntries=[...recovered.values()].filter(item=>!currentIds.has(item.id.toLowerCase()));
+ $('#recovery-list').innerHTML=recoveryEntries.length?recoveryEntries.map((item,index)=>`<article class="recovery-item"><strong>${esc(item.location||'Location not entered')}</strong><p>${esc(item.at)}${item.technician?' · '+esc(item.technician):''}</p><p>${item.kind==='pending'?'Waiting for Drive confirmation':'Unfinished test'}</p><button class="secondary" data-recovery="${index}">View report</button></article>`).join(''):'<p>No other unfinished tests were found on this device.</p>';
+ $('#recovery-warning').hidden=!recovery.unreadable;
+ $('#recovery-dialog').showModal();
+}
+async function openRecoveredTest(index){
+ const item=recoveryEntries[index];
+ if(!item||item.id.toLowerCase()===s.reportId.toLowerCase()||['saving','changing'].includes(reportMode)||!ioIdle())return;
+ if(reportMode==='live'&&!save()){toast('Save or download the current test before opening another report.');return;}
+ let candidate;
+ try{candidate=item.kind==='pending'?freezeRecord(item.record):createReportRecord(item.draft,{id:item.id});}
+ catch(error){toast(error.message||'This unfinished test could not be opened.');return;}
+ recoveryContext||={reportMode,pendingRecord,savedRecord,savedReceipt,reportError,cacheError};
+ reportMode='changing';stopReportActivity();$('#recovery-dialog').close();render();
+ try{await usb.disconnect();pendingRecord=candidate;savedRecord=null;savedReceipt=null;reportError='';cacheError='';reportMode='pending';render(true);}
+ catch(error){returnToCurrentTest();toast('The USB connection could not be closed: '+error.message);}
+}
+function returnToCurrentTest(){
+ if(!recoveryContext||reportMode==='saving')return;
+ ({reportMode,pendingRecord,savedRecord,savedReceipt,reportError,cacheError}=recoveryContext);
+ recoveryContext=null;checksPaused=reportMode==='live';forkCurrentTestIfSaved();render(true);
+}
+function forkCurrentTestIfSaved(markerText){
+ if(reportMode!=='live')return;
+ try{const marker=JSON.parse(markerText??localStorage.getItem(savedKey(s.reportId)));validateSaveResult(marker?.receipt,s.reportId.toLowerCase());}catch{return;}
+ s.reportId=crypto.randomUUID();save();
+ toast('This test was saved in another window. Further work has a new report ID.');
 }
 function stopReportActivity(){
  advancePending=false;entry++;attempted=-1;resetComplete=-1;physicalDone=false;
@@ -128,6 +159,7 @@ function refreshReportControls(){
  $('#save-report').disabled=changing||reportMode==='saved'||busy||(live&&!hasReportData(s));
  $('#saved-reports').disabled=changing||busy;
  $('#restart').disabled=changing||busy;
+ $('#recover-reports').disabled=changing||busy;
  $('#save-result')?.toggleAttribute('disabled',changing||busy||!hasReportData(s));
 }
 function renderReportView(focus=false){
@@ -143,6 +175,11 @@ function renderReportView(focus=false){
  $('#storage-label').textContent=saved?'Report confirmed in Google Drive':cacheError?'Pending report cache needs attention':'Pending report kept for retry';
  $('#step').innerHTML=`<div class="eyebrow"><span class="mini-dot"></span>${saved?'SAVED REPORT':'REPORT STORAGE'}</div><div class="outcome-mark ${saved?'success':'unresolved'}" aria-hidden="true">${saved?'✓':'↗'}</div><h1>${heading}</h1><p class="lede">${message}</p>${reportError?`<p class="report-error" role="alert">${esc(reportError)}</p>`:''}${cacheError?`<p class="report-error" role="alert">${esc(cacheError)}</p>`:''}${record?`<dl class="saved-report-meta"><div><dt>Result</dt><dd>${esc(record.title)}</dd></div><div><dt>Location</dt><dd>${esc(record.location||'Not entered')}</dd></div><div><dt>Technician</dt><dd>${esc(record.technician||'Not entered')}</dd></div><div><dt>Report time</dt><dd>${esc(record.savedAt)}</dd></div></dl><details class="frozen-report"><summary>Read the frozen report and USB evidence</summary><pre>${esc(record.reportText)}</pre></details>`:''}<div class="step-actions report-view-actions">${saved&&savedReceipt?`<a class="secondary" href="${esc(savedReceipt.url)}" target="_blank" rel="noopener noreferrer">Open Drive report ↗</a>`:''}<button class="secondary" id="download-frozen" ${record?'':'disabled'}>Download copy</button>${saved?'<button class="primary" id="new-report-saved">New report</button>':`<button class="primary" id="retry-save" ${saving||changing?'disabled':''}>${saving?'Waiting for Drive…':'Retry Save to Drive'}</button>`}</div>${!saved&&!saving&&!changing?'<button class="text-button" id="new-report-pending">Save to Drive and start a new report</button>':''}`;
  $('#download-frozen')?.addEventListener('click',download);
+ if(recoveryContext){
+  $('#storage-label').textContent=saved?'Report confirmed in Google Drive':'Recovered report · read-only';
+  $('#step').insertAdjacentHTML('afterbegin',`<div class="note"><p>This report was recovered from this device. It does not restart locker checks.</p><button class="secondary" id="close-recovered" ${saving||changing?'disabled':''}>Back to current test</button></div>`);
+  $('#close-recovered').addEventListener('click',returnToCurrentTest);
+ }
  $('#retry-save')?.addEventListener('click',()=>saveToDrive());
  $('#new-report-saved')?.addEventListener('click',requestNewReport);
  $('#new-report-pending')?.addEventListener('click',requestNewReport);
@@ -153,20 +190,24 @@ async function saveToDrive({startNew=false}={}){
  if(['saving','changing'].includes(reportMode)||!ioIdle())return false;
  if(reportMode==='saved')return startNew?startFreshReport():true;
  if(reportMode==='live'&&!hasReportData(s)){toast('Add observations or complete a check before saving a report.');return false;}
+ forkCurrentTestIfSaved();
  const wasLive=reportMode==='live';
  reportMode='saving';reportError='';cacheError='';
  stopReportActivity();
  try{
   if(!pendingRecord){s.usb=usb?.snapshot()||s.usb;s.reportId||=crypto.randomUUID();const candidate=createReportRecord(s,{id:s.reportId});buildReportPayload(payloadForDrive(candidate));pendingRecord=candidate;}
-  cacheSet(PENDING_KEY,pendingRecord);if(wasLive)save();
+  // Keep the exact retry in this page too when device storage is full/blocked.
+  volatilePending.set(pendingRecord.id.toLowerCase(),pendingRecord);
+  cacheSet(pendingKey(pendingRecord.id),pendingRecord);if(wasLive)save();
   render(true);
   // Deliberately invoke save before the first await: it opens its authenticated
   // portal synchronously in the original Save click's user gesture.
   const operation=drive.save(payloadForDrive(pendingRecord));
   const receipt=await operation;
   savedRecord=pendingRecord;savedReceipt=freezeRecord(receipt);
-  const receiptStored=cacheSet(SAVED_KEY,{schema:1,record:savedRecord,receipt:savedReceipt});
-  if(receiptStored){cacheError='';cacheRemove(PENDING_KEY);}else cacheError='Google Drive confirmed this report, but this browser could not retain its receipt. Use Saved reports to reopen it from Drive.';
+  volatilePending.delete(savedRecord.id.toLowerCase());
+  const receiptStored=cacheSet(savedKey(savedRecord.id),{schema:1,receipt:savedReceipt});
+  if(receiptStored){cacheError='';cacheRemove(pendingKey(savedRecord.id));cacheRemove(draftKey(savedRecord.id));}else cacheError='Google Drive confirmed this report, but this browser could not retain its receipt. Use Saved reports to reopen it from Drive.';
   pendingRecord=null;reportMode='saved';reportError='';render(true);
   if(startNew)return startFreshReport();
   return true;
@@ -187,9 +228,7 @@ async function startFreshReport(){
   await usb?.disconnect();
   usb?.clear();
   const draft=freshSession();draft.mode='usb';draft.reportId=crypto.randomUUID();draft.usb=usb?.snapshot()||{};
-  if(!cacheSet(KEY,draft)){reportMode=previousMode;render(true);return false;}
-  s=draft;restored=false;checksPaused=false;pendingRecord=null;savedRecord=null;savedReceipt=null;
-  cacheRemove(PENDING_KEY);cacheRemove(SAVED_KEY);
+  s=draft;checksPaused=false;pendingRecord=null;savedRecord=null;savedReceipt=null;recoveryContext=null;
   reportMode='live';entry++;attempted=-1;resetComplete=-1;physicalDone=false;readingBoard='';setContextPhoto();render(true);enterStep();
   return true;
  }catch(error){reportMode=previousMode;reportError='The new report could not be started: '+(error?.message||String(error));render(true);return false;}
@@ -205,6 +244,9 @@ $('#photo-dialog').addEventListener('click',e=>{if(e.target===$('#photo-dialog')
 $('#save-report').addEventListener('click',()=>saveToDrive());
 $('#saved-reports').addEventListener('click',openSavedReports);
 $('#restart').addEventListener('click',requestNewReport);
+$('#recover-reports').addEventListener('click',showUnfinishedTests);
+$('#close-recovery').addEventListener('click',()=>$('#recovery-dialog').close());
+$('#recovery-list').addEventListener('click',event=>{const button=event.target.closest('[data-recovery]');if(button)openRecoveredTest(Number(button.dataset.recovery));});
 $('#cancel-restart').addEventListener('click',()=>$('#restart-dialog').close());
 $('#confirm-restart').addEventListener('click',()=>{if(!ioIdle()||['saving','changing'].includes(reportMode))return;$('#restart-dialog').close();saveToDrive({startNew:true});});
 s.mode='usb';
@@ -212,3 +254,12 @@ usb=mountUsbPanel($('#usb-root'),{saved:s.usb,onSave:data=>{if(reportMode!=='liv
 function guidedChanged(){if(reportMode!=='live'||checksPaused||s.step!=='connect'||!usb)return;if(snapshot().phase==='attention')advancePending=false;render();if(advancePending&&shouldProceed(snapshot())&&!usb.busy)queueMicrotask(()=>{if(reportMode==='live'&&!checksPaused&&s.step==='connect'&&advancePending&&shouldProceed(snapshot())&&!usb.busy){advancePending=false;next();}});}
 connection=new GuidedConnection({isConnected:()=>usb.connected,probe:()=>usb.check('C'),onChange:guidedChanged,onEvent:event=>record('Guided connection: '+event.message)});
 if(reportMode==='live')save();setContextPhoto();render();if(reportMode==='live')enterStep();
+// Back/forward navigation can revive an old document without running startup.
+// Reset only on that restoration, never on focus returning from Google sign-in.
+window.addEventListener('pageshow',event=>{if(event.persisted)window.location.reload();});
+window.addEventListener('storage',event=>{
+ if(reportMode!=='live'||event.key!==savedKey(s.reportId)||!event.newValue)return;
+ // A recovered copy may have been saved in another open window. Keep any
+ // continued work here under a new ID rather than editing that saved record.
+ forkCurrentTestIfSaved(event.newValue);
+});

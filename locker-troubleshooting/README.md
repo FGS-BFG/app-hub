@@ -4,6 +4,10 @@ The maintained source and authenticated Google Drive backend are in the private 
 
 Use **Save to Drive** to freeze a report and save it through the authenticated Google portal. **Saved reports** opens the central library. **New report** starts a blank report after the current report is confirmed in Drive. Failed saves keep the same frozen report for retry. **Download copy** is separate from central saving.
 
+Every opening or refresh starts a new test at the welcome screen, with blank details and a new report ID. Old results and locker steps are never resumed automatically. Returning from Google sign-in keeps the test currently being saved.
+
+Use **Unfinished tests** to recover a read-only report retained on this device, then save it to Drive or download it. Frozen retries keep their original ID, time and text. Drafts from separate browser tabs use separate storage keys. Saved reports remain in central Drive storage.
+
 Reports belong in **1-Current productions → Field reports**. The portal uses the accessing user's Google permissions. The existing endpoint was updated to version 2 on 18 November 2026 at 08:17 Europe/London. Google authorization, a real save from the public guide in Chrome, and a library read succeeded with an FGS Workspace account. The guide displayed the saved report as read-only. No USB hardware was connected. Live retry behavior and permissions for other users remain unverified.
 
 Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Close the other locker applications, then select master C's COM port when prompted.
