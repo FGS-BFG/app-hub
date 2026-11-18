@@ -1,20 +1,20 @@
-import {BOARD_CONFIGURATIONS,LOCKER_CAPACITIES,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-master';
+import {BEFORE_RESTART_COMMUNICATION,BOARD_CONFIGURATIONS,LOCKER_CAPACITIES,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-before-restart';
 import {mountUsbPanel} from './usb-ui.js?v=20261118-parkit';
 import {createDoorGuide} from './door-ui.js?v=20261118-master';
 import {freshDoorTests,getDoorTargets,getDoorMaster,hasDoorTestData,doorTestSummary} from './door-test.js?v=20261118-master';
 import {boardsFor,masterFor,layoutForCapacity} from './layouts.js?v=20261118-master';
 import {GuidedConnection,shouldProceed} from './guided-connection.js?v=20261118-master';
-import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-master';
+import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-before-restart';
 import {DriveReportClient,buildReportPayload,validateSaveResult} from './drive-reports.js';
 import {FIELD_REPORTS} from './drive-config.js';
-import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-master';
+import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-before-restart';
 
 const drive=new DriveReportClient({endpoint:FIELD_REPORTS.endpoint});
 let checksPaused=false;
 let reportMode='live',pendingRecord=null,savedRecord=null,savedReceipt=null,reportError='',cacheError='';
 let recoveryContext=null,recoveryEntries=[];
 const volatilePending=new Map();
-const stages={welcome:0,identify:0,power:0,startup:0,connect:0,reset:0,initial:1,selftest:1,retry:2,recheck:2,select:2,connector:2,swap:2,cable:2,doors:3,result:4};
+const stages={welcome:0,identify:0,'before-restart':0,power:0,startup:0,connect:0,reset:0,initial:1,selftest:1,retry:2,recheck:2,select:2,connector:2,swap:2,cable:2,doors:3,result:4};
 const PHOTO_SETUPS={
  'flat-input-sense':{label:'Flat Input Sense ribbons',master:'assets/master.png',slave:'assets/slave.png'},
  'individual-wires':{label:'Individual sensor wires',master:'assets/master-wired-labelled.png',slave:'assets/slave-wired-labelled.png'}
@@ -28,7 +28,7 @@ const activeBoards=()=>boardsFor(s);
 const activeMaster=()=>masterFor(s);
 const layoutReady=()=>!!layoutForCapacity(s.details.lockerCapacity);
 const boardNames=()=>{const boards=activeBoards();return boards.length<2?boards.join(''):boards.slice(0,-1).join(', ')+' and '+boards.at(-1);};
-const capacityLocked=()=>!!usb?.connected||!!s.usb?.events?.length||!!Object.keys(s.initial).length||!!Object.keys(s.recheck).length||hasDoorTestData(s.doorTests);
+const capacityLocked=()=>!!s.beforeRestart?.recordedAt||!!usb?.connected||!!s.usb?.events?.length||!!Object.keys(s.initial).length||!!Object.keys(s.recheck).length||hasDoorTestData(s.doorTests);
 function layoutNote(){if(!s.details.lockerCapacity)return 'Select the locker capacity. The guide will check its installed columns.';return layoutReady()?`This ${s.details.lockerCapacity}-bay locker uses columns ${boardNames()}, with ${activeMaster()} as the master.`:'The column layout for this capacity is not confirmed. You can record the setup and save a report; physical checks are unavailable.';}
 s.reportId=crypto.randomUUID();
 let entry=0,attempted=-1,checking=false,resetComplete=-1,physicalDone=false,readingBoard='',photo='master';
@@ -71,6 +71,11 @@ function identificationContent(){
  const photoChoices=BOARD_CONFIGURATIONS.filter(option=>PHOTO_SETUPS[option.id]);
  return `<h1>Identify the board setup.</h1><p class="lede">Compare the sensor connections on the master and slave boards with these photos.</p><p>Choose the setup that matches the installed boards. Enlarge a photo if you need a closer look.</p>${photoExampleNote()?note(photoExampleNote()):''}<fieldset class="setup-fieldset"><legend>Which setup is fitted?</legend><div class="setup-grid">${photoChoices.map(option=>`<article class="setup-card ${selected===option.id?'selected':''}"><button class="setup-pick" data-board-configuration="${option.id}" aria-pressed="${selected===option.id}"><span class="setup-check" aria-hidden="true">${selected===option.id?'✓':'○'}</span><strong>${esc(PHOTO_SETUPS[option.id].label)}</strong><span>${option.id==='flat-input-sense'?'Flat orange Input Sense cables plug into the front headers.':'Individual sensor wires plug into the front headers; the examples use blue wires.'}</span></button><div class="setup-images">${['master','slave'].map(role=>`<button class="setup-photo ${option.id==='individual-wires'?'wired':''}" data-preview-configuration="${option.id}" data-preview-board="${role}" aria-label="Enlarge ${role} photograph: ${esc(PHOTO_SETUPS[option.id].label)}"><img src="${PHOTO_SETUPS[option.id][role]}" alt="${role==='master'?'Master':'Slave'} example with ${option.id==='flat-input-sense'?'flat Input Sense ribbons':'individual blue sensor wires'}" loading="lazy"><span>${role==='master'?'Master':'Slave'} <span aria-hidden="true">⤢</span></span></button>`).join('')}</div></article>`).join('')}</div><div class="choices setup-other">${BOARD_CONFIGURATIONS.filter(option=>!PHOTO_SETUPS[option.id]).map(option=>`<button class="choice ${selected===option.id?'selected':''}" data-board-configuration="${option.id}" aria-pressed="${selected===option.id}">${esc(option.label)}</button>`).join('')}</div></fieldset><p class="setup-help">The master has the USB connection to the PC. If the banks use different sensor connections, select Mixed and record the bank letters below.</p><div class="fields board-labels"><label class="field">Master board label <span class="optional">optional</span><input data-detail="masterBoardLabel" maxlength="160" value="${esc(s.details.masterBoardLabel)}" placeholder="Copy the printed board or firmware label"></label><label class="field">Slave board label(s) <span class="optional">optional</span><input data-detail="slaveBoardLabels" maxlength="500" value="${esc(s.details.slaveBoardLabels)}" placeholder="Include bank letters if labels differ"></label></div><label class="field notes-label">Configuration notes <span class="optional">optional</span><textarea data-detail="configurationNotes" maxlength="2000" placeholder="Record differences between banks or anything that does not match the photos.">${esc(s.details.configurationNotes)}</textarea></label>${note('Copy labels from the boards in front of you. The labels in the reference photos are examples. '+layoutNote())}${actions()}`;
 }
+
+function beforeRestartContent(){
+ const observation=s.beforeRestart,locked=!!observation.recordedAt;
+ return `<h1>Can parkIT communicate<br>with the locker?</h1><p class="lede">Before you restart the locker, record which columns respond in the parkIT app.</p><p>Use what parkIT is showing now. Keep the locker power on and leave the cables connected. If you cannot confirm the current status, select Not sure.</p><fieldset class="setup-fieldset" ${locked?'disabled':''}><legend>Which columns respond?</legend><div class="choices before-restart-choices">${BEFORE_RESTART_COMMUNICATION.map(option=>`<label class="choice ${observation.communication===option.id?'selected':''}"><strong>${esc(option.label)}</strong><input type="radio" name="pre-restart-communication" value="${option.id}" ${observation.communication===option.id?'checked':''}></label>`).join('')}</div></fieldset>${observation.communication==='some'?`<fieldset class="setup-fieldset" ${locked?'disabled':''}><legend>Select the columns that do not respond.</legend><div class="before-restart-boards">${activeBoards().map(board=>`<label class="choice"><strong>${board}${board===activeMaster()?' (master)':''}</strong><input type="checkbox" name="pre-restart-board" value="${board}" ${observation.unresponsiveBoards.includes(board)?'checked':''}></label>`).join('')}</div><p class="setup-help" id="pre-restart-board-help">Select at least one column. If no columns respond, choose No columns respond above.</p></fieldset>`:''}<label class="field notes-label">What is parkIT showing? <span class="optional">optional</span><textarea id="pre-restart-notes" maxlength="2000" ${locked?'readonly':''} placeholder="Record error messages, intermittent replies or other symptoms.">${esc(observation.notes)}</textarea></label>${locked?note('This observation was recorded at '+esc(new Date(observation.recordedAt).toLocaleString())+'. It stays unchanged as you continue the test.'):note('This records your observation from parkIT. The guide will check the boards over USB later.')}<p>Select Next to continue to the locker power cycle.</p>${actions()}`;
+}
 function connectionContent(){
  if(checksPaused)return `<h1>The connection check is paused.</h1><p class="lede">Your report is unchanged. When you are ready, restart the 60-second connection check before continuing.</p><button class="primary" id="retry-connection">Check the connection again</button>${actions()}`;
  const c=snapshot(),ready=shouldProceed(c,activeMaster());
@@ -86,6 +91,7 @@ function connectionContent(){
 function content(){switch(s.step){
  case 'welcome':return welcomeContent();
  case 'identify':return identificationContent();
+ case 'before-restart':return beforeRestartContent();
  case 'power':case 'startup':return `<h1>Turn the locker power off.<br>Then turn it back on.</h1><ol class="physical-steps"><li>Switch off the mains supply to the locker system.</li><li>Switch it back on.</li><li>Wait for the system to finish starting.</li></ol>${note('Restarting the PC alone does not cycle the locker mains supply.')}<p>When the system is back on, select Next. We will connect the USB cable next.</p>${actions()}`;
  case 'connect':return connectionContent();
  case 'reset':case 'retry':return `<h1>${resetComplete===entry?'The reset command has been sent.':`We will reset master ${activeMaster()}.`}</h1><p class="lede">Keep the USB cable connected. We send the reset command to ${activeMaster()} only.</p>${reconnect()}${checking?waiting(`Resetting master ${activeMaster()}…`,'Wait for the master’s five-second reset sequence. You do not need to type a command.'):resetComplete===entry?success('The reset wait is complete.','Select Next. We will check the installed boards automatically.'):usb.connected?waiting('Preparing the reset…',`The guide will send RST to master ${activeMaster()}.`):''}${note('A reset sent to a slave does not perform a meaningful system reset. The board checks verify communication after the master reset.')}${problemExit()}${actions()}`;
@@ -102,7 +108,7 @@ function render(focus=false){
  if(reportMode!=='live'){renderReportView(focus);return;}
  updateLayoutDisplay();
  const stage=stages[s.step];$('#stage-label').textContent=STAGES[stage];$('#guide-usb-status').textContent=usb?.connected?'USB port open':'USB not connected';
- $('#progress').innerHTML=STAGES.map((text,i)=>`<li class="${i===stage?'active':i<stage?'done':''}" ${i===stage?'aria-current="step"':''}><span class="progress-num">${i<stage?'✓':i+1}</span><div>${text}<small>${['Board setup, power and USB','Automatic board replies','Follow the next physical test','One door on '+boardNames(),'Save the evidence to Drive'][i]}</small></div></li>`).join('');
+ $('#progress').innerHTML=STAGES.map((text,i)=>`<li class="${i===stage?'active':i<stage?'done':''}" ${i===stage?'aria-current="step"':''}><span class="progress-num">${i<stage?'✓':i+1}</span><div>${text}<small>${['Board setup, current fault, power and USB','Automatic board replies','Follow the next physical test','One door on '+boardNames(),'Save the evidence to Drive'][i]}</small></div></li>`).join('');
  $('#step').innerHTML=`<div class="eyebrow"><span class="mini-dot"></span>${stage===4?'YOUR RESULT':STAGES[stage]}</div>${content()}`;
  if(s.step==='doors')doorGuide?.render($('#door-guide'));
  usb?.setControlsEnabled(s.step==='result'&&!checksPaused&&layoutReady());refreshReportControls();$('#advanced-diagnostics').hidden=false;
@@ -114,13 +120,29 @@ function render(focus=false){
  document.querySelectorAll('[data-locker-capacity]').forEach(el=>el.addEventListener('click',()=>{
   if(!idle()||s.step!=='welcome'||!LOCKER_CAPACITIES.some(option=>option.id===el.dataset.lockerCapacity))return;
   if(el.dataset.lockerCapacity!==s.details.lockerCapacity){
-   if(capacityLocked()){toast('Start a new report to change capacity after locker checks have started.');return;}
+   if(capacityLocked()){toast('Start a new report to change capacity after observations or locker checks have been recorded.');return;}
+   if(s.beforeRestart.communication||s.beforeRestart.unresponsiveBoards.length){
+    record('Capacity changed before the starting observation was confirmed. Previous draft answer: '+s.beforeRestart.communication+'; selected columns: '+(s.beforeRestart.unresponsiveBoards.join(', ')||'none'));
+    s.beforeRestart.communication='';s.beforeRestart.unresponsiveBoards=[];toast('Capacity changed. Review the parkIT status for this layout. Your notes are retained.');
+   }
    s.details.lockerCapacity=el.dataset.lockerCapacity;s.doorTests=freshDoorTests(activeBoards(),activeMaster());doorGuide?.reset();usb?.refreshLayout?.();
   }
   save();setContextPhoto();render();
  }));
  document.querySelectorAll('[data-board-configuration]').forEach(el=>el.addEventListener('click',()=>{if(!idle()||s.step!=='identify')return;s.details.boardConfiguration=el.dataset.boardConfiguration;save();setContextPhoto();render();}));
  document.querySelectorAll('[data-preview-configuration]').forEach(el=>el.addEventListener('click',()=>showBoardPhoto(el.dataset.previewConfiguration,el.dataset.previewBoard)));
+
+ const editBeforeRestart=()=>idle()&&s.step==='before-restart'&&!s.beforeRestart.recordedAt;
+ document.querySelectorAll('[name="pre-restart-communication"]').forEach(el=>el.addEventListener('change',()=>{
+  if(!editBeforeRestart()||!el.checked||!BEFORE_RESTART_COMMUNICATION.some(option=>option.id===el.value))return;
+  s.beforeRestart.communication=el.value;s.beforeRestart.unresponsiveBoards=[];save();render();document.querySelector('[name="pre-restart-communication"][value="'+el.value+'"]')?.focus({preventScroll:true});
+ }));
+ document.querySelectorAll('[name="pre-restart-board"]').forEach(el=>el.addEventListener('change',()=>{
+  if(!editBeforeRestart()||s.beforeRestart.communication!=='some'||!activeBoards().includes(el.value))return;
+  const selected=new Set(s.beforeRestart.unresponsiveBoards);if(el.checked)selected.add(el.value);else selected.delete(el.value);
+  s.beforeRestart.unresponsiveBoards=activeBoards().filter(board=>selected.has(board));save();refreshControls();
+ }));
+ $('#pre-restart-notes')?.addEventListener('input',event=>{if(!editBeforeRestart())return;s.beforeRestart.notes=event.target.value.slice(0,2000);save();refreshReportControls();});
  $('#back')?.addEventListener('click',()=>{if(!idle())return;const previous=s.history.pop();if(previous){connection.stop();usb.stopMonitor();s.step=previous;entry++;attempted=-1;resetComplete=-1;physicalDone=false;save();setContextPhoto();render(true);enterStep();}});
  $('#guide-connect')?.addEventListener('click',()=>{if(idle())usb.connect();});
  $('#retry-connection')?.addEventListener('click',()=>{if(!idle())return;checksPaused=false;record('Operator requested a new connection check');connection.retry();connection.notifyConnection(usb.connected);});
@@ -144,7 +166,7 @@ function render(focus=false){
 }
 function refreshControls(){if(!usb)return;refreshReportControls();if(reportMode!=='live')return;if($('#next'))$('#next').disabled=!canProceed();if($('#back'))$('#back').disabled=!idle()||!s.history.length;if($('#guide-connect'))$('#guide-connect').disabled=usb.connected||!idle()||!usb.supported;for(const id of ['retry-connection','disconnect-guide','finish-incomplete','connection-unavailable'])if($('#'+id))$('#'+id).disabled=!idle();queueMicrotask(maybeRunStep);}
 function updateSelftestTimer(){if(reportMode!=='live'||s.step!=='selftest'){clearInterval(selftestTimer);selftestTimer=null;return;}const seconds=Math.max(0,Math.ceil((selftestDeadline-Date.now())/1000));if($('#timer-number'))$('#timer-number').textContent=seconds+' s';if($('#timer-help'))$('#timer-help').textContent=seconds?'Keep holding the physical red button.':'10 seconds have passed. Tell us whether the self-test started.';if(!seconds){clearInterval(selftestTimer);selftestTimer=null;}}
-function next(){if(!canProceed())return;if(s.step==='connect'&&usb.busy){advancePending=true;render();return;}if(s.step==='power'||s.step==='startup'){go('connect','Operator confirmed the locker mains cycle and startup');return;}if(s.step==='connect'){s.connection='connected';go('reset',`Master ${activeMaster()} passed the 60-second guided connection check`);return;}if(s.step==='connector')s.acknowledged=true;if(['swap','cable'].includes(s.step)&&!physicalDone){physicalDone=true;record(s.step==='swap'?`Operator confirmed the connection swap at ${s.affected} and ${s.neighbor}`:`Operator confirmed a working cable on board ${s.neighbor} and the same hub connection`);runChecks(s.step==='swap'?'swapped':'cable',s.step==='swap'?[s.affected,s.neighbor]:[s.neighbor]);return;}const step=nextStep(s);if(step)go(step,stepRecord());}
+function next(){if(!canProceed())return;if(s.step==='connect'&&usb.busy){advancePending=true;render();return;}if(s.step==='before-restart'){if(!s.beforeRestart.recordedAt)s.beforeRestart.recordedAt=new Date().toISOString();go('power','Operator recorded parkIT communication before restart: '+s.beforeRestart.communication+(s.beforeRestart.unresponsiveBoards.length?'; columns not responding: '+s.beforeRestart.unresponsiveBoards.join(', '):''));return;}if(s.step==='power'||s.step==='startup'){go('connect','Operator confirmed the locker mains cycle and startup');return;}if(s.step==='connect'){s.connection='connected';go('reset',`Master ${activeMaster()} passed the 60-second guided connection check`);return;}if(s.step==='connector')s.acknowledged=true;if(['swap','cable'].includes(s.step)&&!physicalDone){physicalDone=true;record(s.step==='swap'?`Operator confirmed the connection swap at ${s.affected} and ${s.neighbor}`:`Operator confirmed a working cable on board ${s.neighbor} and the same hub connection`);runChecks(s.step==='swap'?'swapped':'cable',s.step==='swap'?[s.affected,s.neighbor]:[s.neighbor]);return;}const step=nextStep(s);if(step)go(step,stepRecord());}
 async function sendReset(){if(reportMode!=='live'||!usb.connected||!idle())return;const ownEntry=entry;checking=true;resetComplete=-1;if(s.step==='reset'){s.initial={};s.selftest='';}s.recheck={};s.checkErrors={};clearComparison();save();render();try{await usb.reset();if(reportMode!=='live'||entry!==ownEntry)return;resetComplete=entry;s.connection='connected';record(`USB RST#${activeMaster()} transmitted; six-second reset wait completed. Subsequent board checks verify communication.`);}catch(e){s.checkErrors={...s.checkErrors,RST:e.message};record('Master reset check incomplete: '+e.message);}finally{checking=false;save();render();}}
 async function runChecks(field,boards){
  if(!usb.connected||!idle())return;checking=true;const ownEntry=entry;

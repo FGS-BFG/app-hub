@@ -1,5 +1,6 @@
-import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-master';
+import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-before-restart';
 import {validateDoorTests,hasDoorTestData} from './door-test.js?v=20261118-master';
+import {validateBeforeRestart} from './before-restart.js?v=20261118-before-restart';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fields = ['id', 'savedAt', 'title', 'location', 'technician', 'reportText'];
@@ -85,6 +86,7 @@ function validateSession(session) {
   // Validate the stored targets, preserving historical target-less five-bank
   // drafts. Current-layout completion is checked by the workflow, not by a save.
   validateDoorTests(session.doorTests);
+  validateBeforeRestart(session.beforeRestart);
 }
 
 function clone(value) {
@@ -137,6 +139,7 @@ export function payloadForDrive(record) {
   // A previous capacity-only guide could record all five banks for a 32-bay
   // locker. Retrying its frozen text must not reassign or erase those targets.
   validateDoorTests(record.session.doorTests);
+  validateBeforeRestart(record.session.beforeRestart);
   // Retries send exactly the saved text. Never regenerate an old report using a
   // newer outcome/formatter, which may legitimately use different wording.
   return Object.fromEntries(fields.map(key => [key, record[key]]));
@@ -150,6 +153,12 @@ function hasEntries(value) {
 
 export function hasReportData(session) {
   if (!isObject(session)) return false;
+  if (session.beforeRestart !== undefined) {
+    try { validateBeforeRestart(session.beforeRestart); }
+    catch { return true; } // Malformed evidence must never be silently discarded.
+    const before = session.beforeRestart;
+    if (hasText(before.communication) || hasText(before.notes) || hasText(before.recordedAt) || before.unresponsiveBoards.length) return true;
+  }
   if (hasDoorTestData(session.doorTests)) return true;
   if (['location', 'technician', 'notes', 'title', 'lockerCapacity', 'boardConfiguration', 'masterBoardLabel', 'slaveBoardLabels', 'configurationNotes'].some(key => hasText(session.details?.[key]))) return true;
   if (['connection', 'selftest', 'affected', 'neighbor', 'cable', 'title'].some(key => hasText(session[key]))) return true;

@@ -33,6 +33,7 @@ class FakeElement{
     this.document=document;this.tagName=tag.toUpperCase();this.attributes={...attributes};this.owner=owner;
     this.id=attributes.id||'';this.dataset={};this.listeners=new Map();this._html='';this.textContent='';
     this.value=attributes.value||'';this.disabled=Object.hasOwn(attributes,'disabled');this.hidden=Object.hasOwn(attributes,'hidden');this.open=false;
+    this.name=attributes.name||'';this.type=attributes.type||'';this.checked=Object.hasOwn(attributes,'checked');this.readOnly=Object.hasOwn(attributes,'readonly');
     for(const[key,value]of Object.entries(attributes))if(key.startsWith('data-'))this.dataset[key.slice(5).replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=value;
     const classes=new Set((attributes.class||'').split(/\s+/).filter(Boolean));
     this.classList={add:name=>classes.add(name),remove:name=>classes.delete(name),contains:name=>classes.has(name),toggle(name,force){if(force??!classes.has(name)){classes.add(name);return true;}classes.delete(name);return false;}};
@@ -61,16 +62,26 @@ class FakeDocument{
     for(const match of markup.matchAll(/<([a-z][\w-]*)\b([^>]*)>/gi)){
       const attributes={};
       for(const attribute of match[2].matchAll(/([\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g))attributes[attribute[1]]=attribute[2]??attribute[3]??attribute[4]??'';
-      this.elements.push(new FakeElement(this,match[1],attributes,owner));
+      const element=new FakeElement(this,match[1],attributes,owner);
+      if(element.tagName==='TEXTAREA')element.value=markup.slice(match.index+match[0].length).split(/<\/textarea\s*>/i)[0]
+        .replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&');
+      this.elements.push(element);
     }
   }
   removeOwned(owner){this.elements=this.elements.filter(element=>{for(let parent=element.owner;parent;parent=parent.owner)if(parent===owner)return false;return true;});}
   matches(element,selector){
+    if(selector.includes(','))return selector.split(',').some(part=>this.matches(element,part.trim()));
+    if(selector.includes(':checked')&&!element.checked)return false;
+    if(selector.includes(':disabled')&&!element.disabled)return false;
+    selector=selector.replace(/:(checked|disabled)\b/g,'');
     if(selector.startsWith('#'))return element.id===selector.slice(1);
     if(selector.startsWith('.'))return element.classList.contains(selector.slice(1));
-    const attribute=selector.match(/^\[([^\]]+)\]$/);
-    if(attribute)return Object.hasOwn(element.attributes,attribute[1]);
-    return element.tagName.toLowerCase()===selector.toLowerCase();
+    const tag=selector.match(/^[a-z][\w-]*/i)?.[0];
+    if(tag&&element.tagName.toLowerCase()!==tag.toLowerCase())return false;
+    const attributes=[...selector.matchAll(/\[([\w-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]/g)];
+    if(attributes.length)return attributes.every(attribute=>Object.hasOwn(element.attributes,attribute[1])&&
+      (attribute[2]===undefined&&attribute[3]===undefined&&attribute[4]===undefined||element.getAttribute(attribute[1])===(attribute[2]??attribute[3]??attribute[4])));
+    return !!tag;
   }
   querySelector(selector){return this.elements.find(element=>this.matches(element,selector))??null;}
   querySelectorAll(selector){return this.elements.filter(element=>this.matches(element,selector));}
@@ -82,7 +93,7 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   const document=new FakeDocument(html),microtasks=[],timers=new Map(),windowListeners=new Map();
   const calls={uuid:0,usbCheck:0,usbScan:0,usbReset:0,usbConnect:0,doorOpen:0,doorRead:0,guidedStart:0,driveSave:0,library:0,reloads:0};
   const drivePayloads=[],doorTargets=[],scanTargets=[],queryTargets=[],resetTargets=[];
-  let timerId=0,releaseDoor;
+  let timerId=0,releaseDoor,mockUsb,appNow=Date.now();
   const usbData={boards:{},lastBits:{},events:[],checks:[],observations:[],connected:usbConnected};
   const window={
     addEventListener(type,listener){if(!windowListeners.has(type))windowListeners.set(type,[]);windowListeners.get(type).push(listener);},
@@ -120,8 +131,9 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
       },
       async readDoorTestInputs(board,{onSample}){calls.doorRead++;for(const value of getBoards())onSample({board:value,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:01.000Z',elapsedMs:5});},
     };
-    onSave(clone(usbData));return usb;
+    mockUsb=usb;onSave(clone(usbData));return usb;
   }
+  class AppDate extends Date{constructor(...args){super(...(args.length?args:[appNow]));}static now(){return appNow;}}
   const setTimer=callback=>{const id=timerId++;timers.set(id,callback);return id;};
   const context=vm.createContext({...flow,...records,...driveHelpers,...storageHelpers,...doorTests,...layouts,
     // Production ESM modules share a realm. Normalize the VM/host boundary here
@@ -130,25 +142,31 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     DriveReportClient,GuidedConnection,mountUsbPanel,createDoorGuide,shouldProceed:(snapshot,master)=>snapshot.phase==='ready'&&snapshot.masterBoard===master,
     FIELD_REPORTS:{endpoint:'https://script.google.com/macros/s/TEST/exec'},
     document,window,localStorage:storage,crypto:{randomUUID(){calls.uuid++;return uuid();}},
-    navigator:{clipboard:{writeText:async()=>{}}},structuredClone,
+    navigator:{clipboard:{writeText:async()=>{}}},structuredClone,Date:AppDate,
     queueMicrotask:callback=>microtasks.push(callback),setTimeout:setTimer,setInterval:setTimer,
     clearTimeout:id=>timers.delete(id),clearInterval:id=>timers.delete(id),console,
   });
   function flush(){for(let runs=0;microtasks.length;runs++){assert.ok(runs<100,'boot microtasks must settle');microtasks.shift()();}}
   new vm.Script(appSource,{filename:appUrl.pathname}).runInContext(context);flush();
-  const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,initial:s.initial,recheck:s.recheck,doorTests:s.doorTests,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
+  const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,beforeRestart:s.beforeRestart,initial:s.initial,recheck:s.recheck,doorTests:s.doorTests,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
+  const earlierPageFixture="s.beforeRestart={communication:'unsure',unresponsiveBoards:[],notes:'Fixture begins after the earlier observation page.',recordedAt:s.started};";
   return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,scanTargets,queryTargets,resetTargets,
-    enterDoorStep(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('doors','Test fixture completed communication checks')",context);flush();},
-    enterInitialCheck(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('initial','Test fixture completed connection check')",context);flush();},
-    enterConnection(capacity='32'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('connect','Test fixture completed power cycle')",context);flush();},
-    enterSelfTest(capacity='80',setup='flat-input-sense'){context.fixtureCapacity=capacity;context.fixtureSetup=setup;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.details.boardConfiguration=fixtureSetup;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('selftest','Test fixture requested physical self-test')",context);flush();},
+    enterBeforeRestart(capacity='80',setup='flat-input-sense',{connected=false}={}){this.chooseCapacity(capacity);this.click('next');this.chooseConfiguration(setup);if(connected){mockUsb.connected=true;usbData.connected=true;}this.click('next');assert.equal(state().step,'before-restart');},
+    enterDoorStep(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('doors','Test fixture completed communication checks')",context);flush();},
+    enterInitialCheck(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('initial','Test fixture completed connection check')",context);flush();},
+    enterConnection(capacity='32'){context.fixtureCapacity=capacity;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('connect','Test fixture completed power cycle')",context);flush();},
+    enterSelfTest(capacity='80',setup='flat-input-sense'){context.fixtureCapacity=capacity;context.fixtureSetup=setup;vm.runInContext(earlierPageFixture+"s.details.lockerCapacity=fixtureCapacity;s.details.boardConfiguration=fixtureSetup;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('selftest','Test fixture requested physical self-test')",context);flush();},
     timerCount(){return timers.size;},
+    advanceAppTime(ms){appNow+=ms;},
+    finding:()=>JSON.parse(vm.runInContext('JSON.stringify(outcome(s))',context)),
     readyConnection(master){context.fixtureMaster=master;vm.runInContext("connection.snapshot=()=>({phase:'ready',masterBoard:fixtureMaster,connected:true,verifiedAt:1});render()",context);flush();},
     releaseDoor(){releaseDoor?.();},
     change(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI input exists: '+id);element.value=value;element.dispatch('change');flush();},
     type(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI field exists: '+id);element.value=value;element.dispatch('input');flush();},
     check(id,value=true){const element=document.querySelector('#'+id);assert.ok(element,'actual UI checkbox exists: '+id);element.checked=value;element.dispatch('change');flush();},
     selectData(attribute,value){const element=document.querySelectorAll('['+attribute+']').find(item=>item.getAttribute(attribute)===value);assert.ok(element,'actual UI choice exists: '+attribute+' '+value);element.click();flush();},
+    beforeCommunication(value){const options=document.querySelectorAll('[name="pre-restart-communication"]'),element=options.find(item=>item.value===value);assert.ok(element,'pre-restart answer exists: '+value);for(const item of options)item.checked=item===element;element.dispatch('change');flush();},
+    beforeBoard(board,checked=true){const element=document.querySelectorAll('[name="pre-restart-board"]').find(item=>item.value===board);assert.ok(element,'pre-restart column exists: '+board);element.checked=checked;element.dispatch('change');flush();},
     async settle(){for(let i=0;i<8;i++){await Promise.resolve();flush();}},
     recoveries:()=>JSON.parse(vm.runInContext('JSON.stringify(recoveryEntries.map(item=>({id:item.id,kind:item.kind})))',context)),
     async openRecovery(id){
@@ -175,6 +193,7 @@ function freshWelcome(app,oldIds=[]){
   assert.deepEqual(state.details,{location:'',technician:'',notes:'',lockerCapacity:'',boardConfiguration:'',masterBoardLabel:'',slaveBoardLabels:'',configurationNotes:''});
   assert.equal(app.document.querySelector('#next').disabled,true,'a fresh test requires a capacity choice');
   assert.deepEqual(state.initial,{});assert.deepEqual(state.recheck,{});
+  assert.deepEqual(state.beforeRestart,{communication:'',unresponsiveBoards:[],notes:'',recordedAt:''});
   assert.deepEqual(state.history,[]);assert.deepEqual(state.log,[]);
   assert.equal(state.pending,null);assert.equal(state.saved,null);assert.equal(state.recovery,null);
   assert.match(state.id,/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -367,12 +386,14 @@ test('board identification gates the power step and preserves labels through a f
   const identification={boardConfiguration:'individual-wires',masterBoardLabel:'Master C label 304-C',
     slaveBoardLabels:'A/B/D/E: 304 slave labels',configurationNotes:'Individual blue sensor wires observed on all banks.'};
   for(const key of ['masterBoardLabel','slaveBoardLabels','configurationNotes'])app.input(key,identification[key]);
-  app.click('next');assert.equal(app.state().step,'power');
+  app.click('next');assert.equal(app.state().step,'before-restart');
+  app.beforeCommunication('unsure');app.click('next');assert.equal(app.state().step,'power');
   for(const[key,value]of Object.entries(identification))assert.equal(app.state().details[key],value);
   noAutomaticIO(app);
   app.click('save-report');await app.settle();
   assert.equal(app.state().mode,'pending');assert.equal(app.calls.driveSave,1);
   const frozen=app.state().pending;
+  assert.equal(frozen.session.beforeRestart.communication,'unsure');assert.ok(frozen.session.beforeRestart.recordedAt);
   for(const[key,value]of Object.entries(identification))assert.equal(frozen.session.details[key],value);
   const pendingRaw=storage.getItem(storageHelpers.pendingKey(frozen.id));assert.ok(pendingRaw);
   const reopened=boot(storage);freshWelcome(reopened,[frozen.id]);
@@ -616,4 +637,91 @@ test('opening button help, switching references and enlarging the photo do not s
   app.click('close-photo');app.change('button-help-setup','flat-input-sense');
   assert.equal(app.document.querySelector('#button-help-image').getAttribute('src'),'assets/master.png');
   assert.deepEqual(app.state(),before);assert.equal(app.timerCount(),0);noAutomaticIO(app);
+});
+
+test('the pre-restart page records all, none or unsure before power without any automatic USB action',()=>{
+  for(const capacity of ['80','64','32'])for(const answer of ['all','none','unsure']){
+    const app=boot();app.enterBeforeRestart(capacity,'flat-input-sense',{connected:true});
+    assert.deepEqual(app.state().beforeRestart,{communication:'',unresponsiveBoards:[],notes:'',recordedAt:''});
+    assert.deepEqual(app.document.querySelectorAll('[name="pre-restart-communication"]').map(element=>element.value),['all','some','none','unsure']);
+    assert.equal(app.document.querySelector('#next').disabled,true);
+    const finding=app.finding(),initial=app.state().initial,recheck=app.state().recheck;
+    app.click('next');assert.equal(app.state().step,'before-restart');
+    app.beforeCommunication(answer);app.type('pre-restart-notes','Observation from parkIT before the power cycle.');
+    assert.equal(app.document.querySelector('#next').disabled,false);
+    assert.equal(app.document.querySelectorAll('[name="pre-restart-board"]').length,0,'only some needs a column checklist');
+    assert.equal(app.state().beforeRestart.recordedAt,'');noAutomaticIO(app);
+    app.click('next');assert.equal(app.state().step,'power');
+    assert.equal(app.state().beforeRestart.communication,answer);
+    assert.deepEqual(app.state().beforeRestart.unresponsiveBoards,[]);
+    assert.equal(app.state().beforeRestart.notes,'Observation from parkIT before the power cycle.');
+    assert.match(app.state().beforeRestart.recordedAt,/^\d{4}-\d{2}-\d{2}T.*Z$/);
+    assert.deepEqual(app.state().initial,initial);assert.deepEqual(app.state().recheck,recheck);assert.deepEqual(app.finding(),finding);
+    noAutomaticIO(app);
+  }
+});
+
+test('some columns requires a proper nonempty subset of the fitted layout and labels its configured master',()=>{
+  for(const[capacity,master,targets]of[['32','B',['A','B']],['64','C',['A','B','C','D']],['80','C',['A','B','C','D','E']]]){
+    const app=boot();app.enterBeforeRestart(capacity,'individual-wires',{connected:true});
+    app.beforeCommunication('some');
+    assert.deepEqual(app.document.querySelectorAll('[name="pre-restart-board"]').map(element=>element.value),targets);
+    assert.ok(app.document.querySelector('#step').innerHTML.includes(`<strong>${master} (master)</strong>`));
+    assert.equal(app.document.querySelector('#next').disabled,true);app.click('next');assert.equal(app.state().step,'before-restart');
+    for(const board of targets)app.beforeBoard(board);
+    assert.equal(app.document.querySelector('#next').disabled,true,'all fitted columns needs the none response');
+    app.click('next');assert.equal(app.state().step,'before-restart');
+    app.beforeBoard(targets.at(-1),false);
+    assert.equal(app.document.querySelector('#next').disabled,false);
+    const expected=targets.slice(0,-1),finding=app.finding();
+    app.click('next');assert.equal(app.state().step,'power');
+    assert.equal(app.state().beforeRestart.communication,'some');assert.deepEqual(app.state().beforeRestart.unresponsiveBoards,expected);
+    assert.deepEqual(app.finding(),finding);assert.deepEqual(app.state().initial,{});assert.deepEqual(app.state().recheck,{});
+    noAutomaticIO(app);
+  }
+});
+
+test('recorded pre-restart evidence is read-only on Back, resists stale events and stays blank in a new opening',()=>{
+  const app=boot();app.enterBeforeRestart('32');app.beforeCommunication('some');app.beforeBoard('A');
+  app.type('pre-restart-notes','A did not respond in parkIT before restarting.');
+  const oldRadio=app.document.querySelectorAll('[name="pre-restart-communication"]').find(element=>element.value==='all');
+  const oldBoard=app.document.querySelectorAll('[name="pre-restart-board"]').find(element=>element.value==='B');
+  const oldNotes=app.document.querySelector('#pre-restart-notes');
+  app.click('next');assert.equal(app.state().step,'power');
+  const recorded=app.state().beforeRestart;assert.ok(recorded.recordedAt);
+  app.click('back');assert.equal(app.state().step,'before-restart');
+  assert.deepEqual(app.state().beforeRestart,recorded);
+  assert.ok(app.document.querySelectorAll('fieldset').some(element=>element.disabled));
+  assert.equal(app.document.querySelector('#pre-restart-notes').readOnly,true);
+  assert.equal(app.document.querySelector('#pre-restart-notes').value,recorded.notes);
+  assert.equal(app.document.querySelector('[name="pre-restart-board"][value="A"]').checked,true);
+  assert.match(app.document.querySelector('#step').innerHTML,/observation was recorded/);
+  oldRadio.checked=true;oldRadio.dispatch('change');oldBoard.checked=true;oldBoard.dispatch('change');
+  oldNotes.value='Changed after recording';oldNotes.dispatch('input');app.flush();
+  assert.deepEqual(app.state().beforeRestart,recorded,'detached earlier event handlers cannot rewrite recorded evidence');
+  const currentNotes=app.document.querySelector('#pre-restart-notes');currentNotes.value='Another late edit';currentNotes.dispatch('input');app.flush();
+  assert.deepEqual(app.state().beforeRestart,recorded);
+  app.advanceAppTime(60000);app.click('next');assert.equal(app.state().step,'power');
+  assert.deepEqual(app.state().beforeRestart,recorded,'continuing again does not replace the first recording time');
+  const raw=app.storage.getItem(storageHelpers.draftKey(app.state().id)),reopened=boot(app.storage);
+  freshWelcome(reopened,[app.state().id]);assert.equal(app.storage.getItem(storageHelpers.draftKey(app.state().id)),raw);
+  noAutomaticIO(app);
+});
+
+test('changing capacity before confirmation clears stale column choices but retains notes and an audit entry',()=>{
+  const app=boot();app.enterBeforeRestart('80');app.beforeCommunication('some');app.beforeBoard('E');
+  app.type('pre-restart-notes','Review this parkIT message after correcting the locker size.');
+  assert.equal(app.state().beforeRestart.recordedAt,'');
+  app.click('back');assert.equal(app.state().step,'identify');app.click('back');assert.equal(app.state().step,'welcome');
+  app.chooseCapacity('32');
+  assert.equal(app.state().beforeRestart.communication,'');assert.deepEqual(app.state().beforeRestart.unresponsiveBoards,[]);
+  assert.equal(app.state().beforeRestart.notes,'Review this parkIT message after correcting the locker size.');
+  assert.equal(app.state().beforeRestart.recordedAt,'');
+  assert.ok(app.state().log.some(entry=>/some/i.test(entry.label)&&/\bE\b/.test(entry.label)),'the earlier unconfirmed choice is retained in the step record');
+  app.click('next');app.click('next');assert.equal(app.state().step,'before-restart');
+  assert.equal(app.document.querySelector('#next').disabled,true);
+  app.beforeCommunication('some');
+  assert.deepEqual(app.document.querySelectorAll('[name="pre-restart-board"]').map(element=>element.value),['A','B']);
+  app.beforeBoard('A');assert.equal(app.document.querySelector('#next').disabled,false);
+  assert.deepEqual(app.state().beforeRestart.unresponsiveBoards,['A']);noAutomaticIO(app);
 });

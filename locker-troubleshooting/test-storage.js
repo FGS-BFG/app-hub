@@ -1,9 +1,10 @@
-import {hasReportData, payloadForDrive} from './report-record.js?v=20261118-master';
+import {hasReportData, payloadForDrive} from './report-record.js?v=20261118-before-restart';
 import {buildReportPayload, validateSaveResult} from './drive-reports.js';
+import {validateBeforeRestart} from './before-restart.js?v=20261118-before-restart';
 
 export const STORAGE_PREFIX = 'fgs-mci-guided-usb-v4';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const STEPS = new Set(['welcome', 'identify', 'power', 'startup', 'connect', 'reset', 'initial',
+const STEPS = new Set(['welcome', 'identify', 'before-restart', 'power', 'startup', 'connect', 'reset', 'initial',
   'selftest', 'retry', 'recheck', 'select', 'connector', 'swap', 'cable', 'doors', 'result']);
 const BOARDS = new Set(['A', 'B', 'C', 'D', 'E']);
 const STATES = new Set(['responded', 'no-response']);
@@ -38,6 +39,7 @@ function validateDraft(draft) {
   for (const field of ['location', 'technician', 'notes']) {
     if (typeof draft.details[field] !== 'string') throw new TypeError('Invalid draft details.');
   }
+  validateBeforeRestart(draft.beforeRestart);
   for (const [field,limit] of Object.entries({boardConfiguration:80,masterBoardLabel:160,slaveBoardLabels:500,configurationNotes:2000})) {
     const value=draft.details[field];
     if (value!==undefined&&(typeof value!=='string'||value.length>limit)) throw new TypeError('Invalid draft board identification.');

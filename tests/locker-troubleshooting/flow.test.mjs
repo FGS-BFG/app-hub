@@ -23,7 +23,9 @@ test('the guide asks for board identification after location and before the powe
   s.details.lockerCapacity='80';
   assert.equal(nextStep(s),'identify');
   assert.equal(nextStep({...s,step:'identify'}),null);
-  assert.equal(nextStep({...s,step:'identify',details:{...s.details,boardConfiguration:'individual-wires'}}),'power');
+  assert.equal(nextStep({...s,step:'identify',details:{...s.details,boardConfiguration:'individual-wires'}}),'before-restart');
+  assert.equal(nextStep({...s,step:'before-restart'}),null);
+  assert.equal(nextStep({...s,step:'before-restart',beforeRestart:{communication:'unsure',unresponsiveBoards:[],notes:'',recordedAt:''}}),'power');
   assert.equal(nextStep({...s,step:'power'}),'connect');
 });
 
@@ -169,7 +171,7 @@ test('identification needs an explicit recognised choice and allows mixed or unc
   for(const boardConfiguration of BOARD_CONFIGURATIONS.map(option=>option.id)){
     const s={...freshSession(),step:'identify'};s.details.boardConfiguration=boardConfiguration;
     assert.equal(validateStep(s),true);
-    assert.equal(nextStep(s),'power');
+    assert.equal(nextStep(s),'before-restart');
   }
   for(const boardConfiguration of ['',undefined,null,'new firmware','C']){
     const s={...freshSession(),step:'identify'};s.details.boardConfiguration=boardConfiguration;

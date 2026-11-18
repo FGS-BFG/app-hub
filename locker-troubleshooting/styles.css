@@ -21,3 +21,11 @@
 .report-error{padding:13px 15px;border:1px solid #e3b7a8;border-radius:9px;background:#fff5ef;color:#884536;font-size:12px;overflow-wrap:anywhere}.saved-report-meta{display:grid;grid-template-columns:1fr 1fr;gap:15px 20px;margin:24px 0}.saved-report-meta>div{min-width:0}.saved-report-meta dt{font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin-bottom:5px}.saved-report-meta dd{margin:0;font-size:13px;line-height:1.6;overflow-wrap:anywhere}.frozen-report{margin:25px 0;border:1px solid var(--line);border-radius:10px;padding:15px}.frozen-report summary{cursor:pointer;color:var(--teal);font-size:12px;font-weight:600}.frozen-report pre{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.7 Consolas,monospace;max-height:480px;overflow:auto;margin:18px 0 0;padding-top:15px;border-top:1px solid var(--line)}.report-view-actions{justify-content:flex-start;flex-wrap:wrap}.report-view-actions a{text-decoration:none;display:inline-flex;align-items:center}.report-view-actions .primary{margin-left:auto}.top-actions{gap:18px}.result-actions .report-actions{flex-wrap:wrap;justify-content:flex-end}@media(max-width:760px){.topbar{height:auto;min-height:84px;padding:15px 20px;gap:13px;flex-wrap:wrap}.top-actions{margin-left:auto;gap:20px}.top-actions .text-button{font-size:11px}.saved-report-meta{grid-template-columns:1fr}.report-view-actions .primary{margin-left:0}.sidebar>.restart{display:block;margin:0 0 15px auto}.report-actions{gap:7px}.result-actions{flex-wrap:wrap}.report-view-actions>*{flex:1 1 auto}}
 
 .capacity-choices{grid-template-columns:repeat(3,minmax(0,1fr))}.capacity-choices .choice{text-align:center;font-size:16px}
+
+/* Operator observations before any restart or USB commands. */
+.before-restart-choices .choice,.before-restart-boards .choice{cursor:pointer}
+.before-restart-choices .choice:after,.before-restart-boards .choice:after{display:none}
+.before-restart-choices input,.before-restart-boards input{accent-color:var(--teal);width:18px;height:18px;flex:0 0 18px;margin:0}
+.before-restart-boards{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin:10px 0}
+.before-restart-boards .choice:has(input:checked){border-color:var(--teal);background:#f1f7f3;box-shadow:0 0 0 1px var(--teal)}
+.setup-fieldset:disabled .choice{cursor:default}

@@ -4,7 +4,7 @@ The maintained source and authenticated Google Drive backend are in the private 
 
 Use **Save to Drive** to freeze a report and save it through the authenticated Google portal. **Saved reports** opens the central library. **New report** starts a blank report after the current report is confirmed in Drive. Failed saves keep the same frozen report for retry. **Download copy** is separate from central saving.
 
-Every opening or refresh starts a new test at the welcome screen, with blank details and a new report ID. The operator must select 80, 64 or 32 bays before continuing. Capacity controls the fitted columns used for communication, monitoring, sensor snapshots, door tests and reports: 80 bays use A–E; 64 bays use A, B, C and D; 32 bays use A and B with B as master. The 64- and 80-bay layouts use master C. Capacity is recorded in drafts, saved/downloaded reports and frozen retries, with no preselected value on a new test. Capacity cannot change after USB or door-test evidence has been recorded; start a new report for a different layout. Old results and locker steps are never resumed automatically. Returning from Google sign-in keeps the test currently being saved.
+Every opening or refresh starts a new test at the welcome screen, with blank details and a new report ID. The operator must select 80, 64 or 32 bays before continuing. Capacity controls the fitted columns used for communication, monitoring, sensor snapshots, door tests and reports: 80 bays use A–E; 64 bays use A, B, C and D; 32 bays use A and B with B as master. The 64- and 80-bay layouts use master C. Capacity is recorded in drafts, saved/downloaded reports and frozen retries, with no preselected value on a new test. Capacity cannot change after the starting observation or USB or door-test evidence has been recorded; start a new report for a different layout. Old results and locker steps are never resumed automatically. Returning from Google sign-in keeps the test currently being saved.
 
 After location and name, an identification step shows both master/slave photo sets: flat Input Sense ribbons and individual sensor wires. Mixed and Not sure choices are available. Optional installed-board labels and configuration notes are included in the saved report. Copy the actual labels; reference photos do not identify installed firmware. The photo panel can display either setup without changing the recorded choice. This selection does not change the A–E / master C test protocol.
 
@@ -12,13 +12,15 @@ Use **Unfinished tests** to recover a read-only report retained on this device, 
 
 Reports belong in **1-Current productions → Field reports**. The portal uses the accessing user's Google permissions. The existing endpoint was updated to version 2 on 18 November 2026 at 08:17 Europe/London. Google authorization, a real save from the public guide in Chrome, and a library read succeeded with an FGS Workspace account. The guide displayed the saved report as read-only. No USB hardware was connected. Live retry behavior and permissions for other users remain unverified.
 
-Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Close the parkIT app, then select the configured master's COM port when prompted.
+Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Record parkIT's current status when prompted. Close parkIT before the later USB connection step, then select the configured master's COM port.
 
 The guide walks through the mains cycle, master reset, five-board ISB checks, physical self-test and connection comparisons. It can monitor raw sensor inputs on one board or all five, and save a report with timestamps and raw USB traffic to Drive. Browser storage retains drafts and pending retries; a central save is confirmed by the Drive receipt.
 
 ## Guided procedure
 
-Each screen gives the operator one action and a Next button. First, cycle the locker mains supply and wait for startup. The next screen asks the operator to connect the black USB cable and select the locker COM port.
+Each screen gives the operator one action and a Next button. After capacity and board identification, **Can parkIT communicate with the locker?** asks whether all columns, some, none or an unknown number currently respond. Some requires the nonresponding columns to be selected from the fitted layout. Optional notes retain messages and intermittent symptoms. The page sends no USB commands. Next timestamps and locks this starting observation and the capacity; Back cannot rewrite it. Drafts and reports retain it separately from later measured ISB results. Older reports remain valid, and frozen retries keep their original text.
+
+Next, cycle the locker mains supply and wait for startup. The following screen asks the operator to connect the black USB cable, close parkIT and select the locker COM port.
 
 Opening the port does not confirm communication. The guide requires a valid input-status reply from the configured master. If the connection is not confirmed within 60 seconds, it asks the operator to check the power and cable, close the parkIT app, then retry or use the physical self-test.
 
