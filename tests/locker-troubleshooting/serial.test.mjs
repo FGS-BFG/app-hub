@@ -78,6 +78,7 @@ async function opened(t, portOptions={}, options={}) {
 
 test('opens the serial port with the MCI settings and releases it when closed', async t => {
   const {port, transport} = await opened(t);
+  assert.equal(transport.masterBoard, 'C');
   assert.equal(transport.connected, true);
   assert.equal(transport.busy, false);
   assert.equal(port.openCalls.length, 1);
@@ -255,6 +256,72 @@ test('the master reset banner is an acknowledgement rather than proof the reset 
   assert.deepEqual(port.commands, ['RST#C\r']);
   assert.equal(result.acknowledged, true);
   assert.equal(result.confirmed, false);
+});
+
+test('a configured B master receives only RST B and its addressed reset acknowledgement', async t => {
+  const {transport,port,events} = await opened(t, {onCommand(command,p) {
+    assert.equal(command, 'RST#B\r');
+    p.send('<B>SYSTEM_Reset in 5 seconds...\r\n');
+  }}, {masterBoard:'B'});
+  const result = await transport.resetMaster();
+  assert.equal(transport.masterBoard, 'B');
+  assert.deepEqual(port.commands, ['RST#B\r']);
+  assert.deepEqual(events.filter(event=>event.type==='tx').map(event=>event.command), ['RST#B']);
+  assert.equal(result.acknowledged, true);
+  assert.equal(result.confirmed, false);
+  assert.equal(transport.busy, false);
+});
+
+test('a reset banner from C does not acknowledge a B-master reset', async t => {
+  const {transport,port} = await opened(t, {onCommand(command,p) {
+    p.send('<C>SYSTEM_Reset in 5 seconds...\r\n');
+  }}, {masterBoard:'B'});
+  const result = await transport.resetMaster();
+  assert.deepEqual(port.commands, ['RST#B\r']);
+  assert.equal(result.acknowledged, false);
+  assert.equal(result.confirmed, false);
+});
+
+test('configured reset permissions are immutable and do not allow other masters or arbitrary commands', async t => {
+  const {transport,port} = await opened(t, {}, {masterBoard:'B'});
+  assert.throws(()=>{transport.masterBoard='C';}, TypeError);
+  assert.throws(()=>Object.defineProperty(transport,'masterBoard',{value:'C'}), TypeError);
+  for(const command of ['RST#A','RST#C','RST#D','RST#E','RST#B\rRST#C','RST#B\n','LM0#B','LC']) {
+    assert.throws(()=>transport._begin(command,'reset','B'), error=>{
+      assert.equal(isCode('INVALID_COMMAND')(error),true);
+      assert.match(error.message,/RST#B/);
+      assert.doesNotMatch(error.message,/RST#C/);
+      return true;
+    });
+  }
+  assert.deepEqual(port.writes,[]);
+  assert.equal(transport.masterBoard,'B');
+  assert.equal(transport.busy,false);
+});
+
+test('invalid master configuration fails synchronously before opening or writing to a port',()=>{
+  for(const masterBoard of ['', 'b', 'F', 'BC', ' B', 'B\rRST#C', null, 2, {}, ['B']]) {
+    const port = new MockPort();
+    assert.throws(()=>new SerialTransport(port,{masterBoard}),isCode('INVALID_COMMAND'));
+    assert.deepEqual(port.openCalls,[]);assert.deepEqual(port.signalCalls,[]);
+    assert.deepEqual(port.writes,[]);assert.equal(port.closeCalls,0);
+  }
+});
+
+test('B-master configuration leaves addressed reads and scoped door pulse mapping unchanged', async t => {
+  const {transport,port} = await opened(t,{onCommand(command,p) {
+    const requested=command.match(/^ISB#([A-E])\r$/);
+    if(requested)p.send(frame(requested[1]));
+  }},{masterBoard:'B'});
+  for(const board of ['A','B','C','D','E'])assert.equal((await transport.query(board)).board,board);
+  const before=port.commands.length;
+  const first=await transport.pulseDoor('A',1,{durationMs:100});
+  const last=await transport.pulseDoor('B',16,{durationMs:100});
+  assert.deepEqual(port.commands.slice(before),['LMX#A\r','LA0#A\r','ISB#A\r','LMX#A\r','LMX#B\r','LAF#B\r','ISB#B\r','LMX#B\r']);
+  assert.equal(first.openCommand,'LA0#A');assert.equal(first.offCommand,'LMX#A');
+  assert.equal(last.openCommand,'LAF#B');assert.equal(last.offCommand,'LMX#B');
+  assert.equal(first.samples[0].status,'responded');assert.equal(last.samples[0].status,'responded');
+  assert.equal(transport.masterBoard,'B');
 });
 
 test('a real response deadline expires as TIMEOUT while keeping a live transport usable', async t => {

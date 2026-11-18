@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import{ALL_BOARDS,LAYOUTS,layoutForCapacity,boardsFor}from'../../locker-troubleshooting/layouts.js';
+import{ALL_BOARDS,LAYOUTS,layoutForCapacity,boardsFor,masterFor}from'../../locker-troubleshooting/layouts.js';
 
 test('confirmed 80-bay layout keeps A–E, master C and only the physical slave pairs',()=>{
   assert.deepEqual(ALL_BOARDS,['A','B','C','D','E']);
@@ -9,11 +9,12 @@ test('confirmed 80-bay layout keeps A–E, master C and only the physical slave 
   assert.equal(layout.master,'C');assert.deepEqual(layout.adjacentSlavePairs,[['A','B'],['D','E']]);
 });
 
-test('confirmed 32-bay layout contains only B and master C with no interchangeable slave neighbour',()=>{
+test('confirmed 32-bay layout contains A and master B with no interchangeable slave neighbour',()=>{
   const layout=layoutForCapacity('32');
-  assert.deepEqual(layout.boards,['B','C']);assert.deepEqual(layout.doorBanks,['B','C']);
-  assert.equal(layout.master,'C');assert.deepEqual(layout.adjacentSlavePairs,[]);
-  assert.deepEqual(boardsFor({details:{lockerCapacity:'32'}}),['B','C']);
+  assert.deepEqual(layout.boards,['A','B']);assert.deepEqual(layout.doorBanks,['A','B']);
+  assert.equal(layout.master,'B');assert.deepEqual(layout.adjacentSlavePairs,[]);
+  assert.deepEqual(boardsFor({details:{lockerCapacity:'32'}}),['A','B']);
+  assert.equal(masterFor('32'),'B');assert.equal(masterFor({details:{lockerCapacity:'32'}}),'B');
 });
 
 test('confirmed 64-bay layout contains A–D, master C and only the A/B slave pair',()=>{
@@ -36,6 +37,7 @@ test('layout records and their nested lists are immutable',()=>{
 test('unconfirmed and invalid explicit capacities never receive a guessed layout',()=>{
   for(const capacity of ['48','80 bays',80,null,[]]){
     assert.equal(layoutForCapacity(capacity),null);
+    assert.equal(masterFor(capacity),null);
     assert.deepEqual(boardsFor(capacity),[]);
     assert.deepEqual(boardsFor({details:{lockerCapacity:capacity}}),[]);
   }
@@ -43,5 +45,6 @@ test('unconfirmed and invalid explicit capacities never receive a guessed layout
 
 test('only blank or missing legacy capacity retains the historical A–E interpretation',()=>{
   assert.equal(layoutForCapacity(''),null,'an empty value is not a newly confirmed map');
-  for(const value of [undefined,'',{}, {details:{}},{details:{lockerCapacity:''}}])assert.deepEqual(boardsFor(value),ALL_BOARDS);
+  for(const value of [undefined,'',{}, {details:{}},{details:{lockerCapacity:''}}]){assert.deepEqual(boardsFor(value),ALL_BOARDS);assert.equal(masterFor(value),'C');}
+  assert.equal(masterFor('80'),'C');assert.equal(masterFor('64'),'C');
 });

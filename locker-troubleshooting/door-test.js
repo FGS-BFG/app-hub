@@ -17,8 +17,13 @@ function validateTargets(targets,label='targets'){
     Object.keys(targets).length!==targets.length||
     Object.keys(targets).some((key,index)=>key!==String(index))||
     targets.some((bank,index)=>!own(targets,index)||!BANKS.includes(bank))||
-    new Set(targets).size!==targets.length||targets.length&&!targets.includes('C'))invalid(label+' must be unique bank letters A–E including master C, or an empty unconfirmed layout.');
+    new Set(targets).size!==targets.length)invalid(label+' must be unique bank letters A–E, or an empty unconfirmed layout.');
   return targets;
+}
+function validateMaster(master,targets,label='master'){
+  if(master===null&&!targets.length)return master;
+  if(!BANKS.includes(master)||targets.length&&!targets.includes(master))invalid(label+' must be a configured bank in the recorded columns.');
+  return master;
 }
 const sameTargets=(one,two)=>one.length===two.length&&one.every(bank=>two.includes(bank));
 
@@ -28,8 +33,14 @@ export function getDoorTargets(value){
   return [...validateTargets(value&&own(value,'targets')?value.targets:BANKS)];
 }
 
-export function freshDoorTests(targets=BANKS){
-  return{version:1,targets:[...validateTargets(targets)],setup:{connections:'not-confirmed',note:''},
+// Missing master is historical C. Never infer a new master from the target list.
+export function getDoorMaster(value){
+  return validateMaster(value&&own(value,'master')?value.master:'C',getDoorTargets(value));
+}
+
+export function freshDoorTests(targets=BANKS,master='C'){
+  validateTargets(targets);validateMaster(master,targets);
+  return{version:1,targets:[...targets],master,setup:{connections:'not-confirmed',note:''},
     banks:Object.fromEntries(BANKS.map(bank=>[bank,freshBankDoorTest()]))};
 }
 
@@ -72,12 +83,17 @@ function validateSample(sample,label,expectedBoard,{phase=false,targets=BANKS}={
 }
 
 // A missing section is a supported older draft. It is never a completed new test.
-export function validateDoorTests(value,{allowMissing=true,expectedTargets}={}){
+export function validateDoorTests(value,{allowMissing=true,expectedTargets,expectedMaster}={}){
   if(value===undefined&&allowMissing)return value;
-  shape(value,['version','targets','setup','banks'],'section');
+  shape(value,['version','targets','master','setup','banks'],'section');
   if(value.version!==1)invalid('unsupported version.');
   const targets=getDoorTargets(value);
+  const master=getDoorMaster(value);
   if(expectedTargets!==undefined&&!sameTargets(targets,validateTargets(expectedTargets,'expected targets')))invalid('recorded targets do not match the current layout.');
+  if(expectedMaster!==undefined){
+    validateMaster(expectedMaster,expectedTargets??targets,'expected master');
+    if(master!==expectedMaster)invalid('recorded master does not match the current layout.');
+  }
   if(value.setup!==undefined){
     shape(value.setup,['connections','note'],'setup');
     if(!['original','changed','not-confirmed'].includes(value.setup.connections))invalid('setup connection choice is invalid.');
@@ -119,10 +135,10 @@ export function validateDoorTests(value,{allowMissing=true,expectedTargets}={}){
   return value;
 }
 
-export function doorTestsComplete(value,expectedTargets){
+export function doorTestsComplete(value,expectedTargets,expectedMaster){
   if(value===undefined)return false;
   try{
-    validateDoorTests(value,{allowMissing:false,expectedTargets});
+    validateDoorTests(value,{allowMissing:false,expectedTargets,expectedMaster});
     const targets=getDoorTargets(value);
     if(!targets.length)return false;
     if(value.setup?.connections==='changed'&&!value.setup.note.trim())return false;
@@ -134,7 +150,7 @@ export function doorTestsComplete(value,expectedTargets){
 export function hasDoorTestData(value){
   if(value===undefined)return false;
   if(!object(value)||value.version!==1||!object(value.banks))return true;
-  try{getDoorTargets(value);}catch{return true;}
+  try{getDoorTargets(value);getDoorMaster(value);}catch{return true;}
   if(value.setup!==undefined&&!object(value.setup))return true;
   if(value.setup?.connections&&value.setup.connections!=='not-confirmed')return true;
   if(value.setup?.note!==undefined&&(typeof value.setup.note!=='string'||value.setup.note.trim()))return true;
@@ -173,16 +189,18 @@ function bankSummary(entry,targets){
     baselineMissing:[...missing].sort(),commandIssues};
 }
 
-export function doorTestSummary(value,expectedTargets){
-  let data,targets=[];
+export function doorTestSummary(value,expectedTargets,expectedMaster){
+  let data,targets=[],master=null;
   try{
-    data=value??freshDoorTests(expectedTargets===undefined?BANKS:expectedTargets);
-    targets=getDoorTargets(data);validateDoorTests(data);
+    data=value??freshDoorTests(expectedTargets===undefined?BANKS:expectedTargets,expectedMaster===undefined?'C':expectedMaster);
+    targets=getDoorTargets(data);master=getDoorMaster(data);validateDoorTests(data);
     if(expectedTargets!==undefined)validateTargets(expectedTargets,'expected targets');
-  }catch(error){return{complete:false,tested:0,skipped:0,pending:targets.length,targets,banks:{},error:error.message};}
+    if(expectedMaster!==undefined)validateMaster(expectedMaster,expectedTargets??targets,'expected master');
+  }catch(error){return{complete:false,tested:0,skipped:0,pending:targets.length,targets,master,banks:{},error:error.message};}
   const entries=targets.map(bank=>data.banks[bank]);
-  return{complete:doorTestsComplete(value,expectedTargets),targets,layoutConfirmed:targets.length>0,
+  return{complete:doorTestsComplete(value,expectedTargets,expectedMaster),targets,master,layoutConfirmed:targets.length>0,
     targetsMatch:expectedTargets===undefined||sameTargets(targets,expectedTargets),
+    masterMatches:expectedMaster===undefined||master===expectedMaster,
     tested:entries.filter(entry=>entry.status==='tested').length,
     skipped:entries.filter(entry=>entry.status==='skipped').length,
     pending:entries.filter(entry=>!['tested','skipped'].includes(entry.status)).length,
@@ -196,13 +214,14 @@ function commandLine(command){
   return command?`${command.status} at ${command.at}${command.code?' '+command.code:''}${command.error?' — '+command.error:''}${command.raw!==undefined?' RAW '+JSON.stringify(command.raw):''}`:'Not recorded';
 }
 
-export function formatDoorTests(value,expectedTargets){
+export function formatDoorTests(value,expectedTargets,expectedMaster){
   const header='ONE DOOR PER COLUMN';
   if(value===undefined)return header+'\nNot recorded in this older session. No door operation is inferred.';
-  const summary=doorTestSummary(value,expectedTargets);
+  const summary=doorTestSummary(value,expectedTargets,expectedMaster);
   if(summary.error)return header+'\n'+summary.error+'\nNo completed door test is inferred.';
   const targets=summary.targets;
   const lines=[header,targets.length?`Recorded columns: ${targets.join(', ')}.`:'Layout unconfirmed. No columns are assigned; door tests are incomplete.',
+    'Recorded master: '+(summary.master||'Not confirmed')+'.',
     ...(targets.length?[`Recorded attempts: ${summary.tested} tested; ${summary.skipped} skipped; ${summary.pending} pending.`]:[]),
     'Tested records an attempted command and operator answers; it is not a door-function pass.',
     'A sent command confirms transmission only. Lock-off is not a claim that the door physically closed.',
@@ -210,6 +229,7 @@ export function formatDoorTests(value,expectedTargets){
     'Connection setup: '+(value.setup?.connections||'Not recorded'),
     'Setup note: '+(value.setup?.note||'None recorded')];
   if(!summary.targetsMatch)lines.push('Recorded door-test columns differ from the current layout. Historical evidence is retained; these tests do not complete the current layout.');
+  if(!summary.masterMatches)lines.push('Recorded door-test master differs from the current master. Historical evidence is retained; these tests do not complete the current layout.');
   for(const bank of targets){
     const entry=value.banks[bank],finding=summary.banks[bank];
     lines.push('',`BANK ${bank}: ${entry.status}; selected door ${entry.door??'Not selected'}`,

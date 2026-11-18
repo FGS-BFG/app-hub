@@ -29,7 +29,11 @@ export class SerialError extends Error {
 
 export class SerialTransport {
   constructor(port, {onEvent, onState, timeout = 1500, startupDelay = 2000,
-    charDelay = 10, quietDelay = 100, resetDelay = 6000} = {}) {
+    charDelay = 10, quietDelay = 100, resetDelay = 6000, masterBoard = 'C'} = {}) {
+    if (typeof masterBoard !== 'string' || !/^[A-E]$/.test(masterBoard)) {
+      throw new SerialError('INVALID_COMMAND', 'Choose one master board letter from A to E.');
+    }
+    Object.defineProperty(this, 'masterBoard', {value: masterBoard, enumerable: true});
     this.port = port;
     this.connected = false;
     this.busy = false;
@@ -264,7 +268,9 @@ export class SerialTransport {
   }
 
   _begin(command, kind, board) {
-    if (!/^(ISB#[A-E]|RST#C)$/.test(command)) throw new SerialError('INVALID_COMMAND', 'Only ISB#A–E and RST#C are permitted.');
+    if (typeof command !== 'string' || (!/^ISB#[A-E]$/.test(command) && command !== 'RST#' + this.masterBoard)) {
+      throw new SerialError('INVALID_COMMAND', `Only ISB#A–E and RST#${this.masterBoard} are permitted.`);
+    }
     return this._reserve(command, kind, board);
   }
 
@@ -524,7 +530,7 @@ export class SerialTransport {
   }
 
   async resetMaster() {
-    const active = this._begin('RST#C', 'reset', 'C');
+    const active = this._begin('RST#' + this.masterBoard, 'reset', this.masterBoard);
     try {
       await this._prepare(active);
       await this._write(active);

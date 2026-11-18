@@ -1,4 +1,4 @@
-import {freshBankDoorTest,getDoorTargets,doorTestsComplete,doorTestSummary} from './door-test.js?v=20261118-layouts';
+import {freshBankDoorTest,getDoorTargets,getDoorMaster,doorTestsComplete,doorTestSummary} from './door-test.js?v=20261118-master';
 
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const timestamp=()=>new Date().toISOString();
@@ -7,12 +7,12 @@ const answerLabel=value=>({yes:'Yes',no:'No',uncertain:'Could not confirm'}[valu
 
 // Opening is available only from an explicit click in the live door-test step.
 // Rendering, selecting a bank, returning to a report and reconnecting do no I/O.
-export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(getState()),usb,isActive,onChange=()=>{},onBusy=()=>{},onEvent=()=>{}}){
+export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(getState()),getMaster=()=>getDoorMaster(getState()),usb,isActive,onChange=()=>{},onBusy=()=>{},onEvent=()=>{}}){
  let root=null,selected='',busy=false,ready=false,error='',phase='',closedRead=false,token=0;
  let skipReason='',remainingReason='';
  const state=()=>getState();
  const targets=()=>getDoorTargets(state());
- const layoutMatches=()=>targets().length>0&&targets().join('')===getBoards().join('');
+ const layoutMatches=()=>targets().length>0&&targets().join('')===getBoards().join('')&&getDoorMaster(state())===getMaster();
  const bank=()=>state().banks[selected];
  const mutable=()=>isActive()&&!busy&&layoutMatches();
  function changed(){onChange();paint();}
@@ -35,9 +35,9 @@ export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(
   const done=['tested','skipped'].includes(record.status);
   root.innerHTML=`<h1>Test one door<br>on each column.</h1><p class="lede">We will open one selected door on each installed column (${targets().join(', ')}). Test one column at a time.</p>
    <details class="door-setup" ${!setupReady?'open':''}><summary>Connections used for these door tests</summary><p>If you swapped cables earlier, record which connections are now fitted.</p><div class="choices"><button class="choice ${data.setup.connections==='original'?'selected':''}" data-door-setup="original" ${busy||targets().some(value=>!!data.banks[value].command.open)?'disabled':''}>Original connections are restored</button><button class="choice ${data.setup.connections==='changed'?'selected':''}" data-door-setup="changed" ${busy||targets().some(value=>!!data.banks[value].command.open)?'disabled':''}>Testing with changed connections</button></div>${data.setup.connections==='changed'?`<label class="field">Describe the changed connections<textarea id="door-setup-note" maxlength="1000" ${busy||targets().some(value=>!!data.banks[value].command.open)?'disabled':''}>${esc(data.setup.note)}</textarea></label>`:''}</details>
-   <div class="door-bank-tabs" style="--door-columns:${targets().length}" aria-label="Columns to test">${targets().map(value=>`<button class="door-bank ${selected===value?'selected':''}" data-door-bank="${value}" aria-pressed="${selected===value}" ${busy?'disabled':''}><b>${value}${value==='C'?' · master':''}</b><span>${({pending:'Not tested',testing:'In progress',tested:'Result recorded',skipped:'Not completed'})[data.banks[value].status]}</span></button>`).join('')}</div>
+   <div class="door-bank-tabs" style="--door-columns:${targets().length}" aria-label="Columns to test">${targets().map(value=>`<button class="door-bank ${selected===value?'selected':''}" data-door-bank="${value}" aria-pressed="${selected===value}" ${busy?'disabled':''}><b>${value}${value===getMaster()?' · master':''}</b><span>${({pending:'Not tested',testing:'In progress',tested:'Result recorded',skipped:'Not completed'})[data.banks[value].status]}</span></button>`).join('')}</div>
    ${complete?'<div class="guide-status good"><div><strong>Every installed column has a recorded result.</strong><p>Review the results below. Select Next for the final report. A recorded result can include an incomplete test.</p></div></div>':''}
-   <section class="door-current" aria-label="Selected column door test"><h2>Column ${selected}${selected==='C'?' · master':''}</h2>
+   <section class="door-current" aria-label="Selected column door test"><h2>Column ${selected}${selected===getMaster()?' · master':''}</h2>
    ${done?`<p>${record.status==='skipped'?'Not completed: '+esc(record.skipReason):`Door ${record.door}: opened — ${answerLabel(record.operator.opened)}; now closed — ${answerLabel(record.operator.closed)}.`}</p>${attempted?sampleText(record):''}<p>This recorded attempt will not open a door again.</p>`:`<label class="field">Door to test<select id="door-number" ${busy||attempted?'disabled':''}><option value="">Choose a door</option>${Array.from({length:16},(_,index)=>`<option value="${index+1}" ${record.door===index+1?'selected':''}>Door ${index+1}</option>`).join('')}</select></label><p class="door-number-help">Door numbers 1–16 use the same output order as the locker tester. Printed board channels 0–15 correspond to doors 1–16.</p>
    ${!attempted?`<label class="door-ready"><input id="door-ready" type="checkbox" ${ready?'checked':''} ${busy?'disabled':''}> The selected door is closed, clear and ready to open.</label><p>Stand by the selected door. Select Open door, then pull it open. Keep it open until the guide asks you to close it.</p><button class="primary" id="door-open" ${!mutable()||!usb.connected||!setupReady||!record.door||!ready?'disabled':''}>Open door ${record.door||'…'} on ${selected}</button>${!setupReady?'<p class="door-help">Record the connections above before opening a door.</p>':''}`:''}
    ${busy?`<div class="guide-status waiting"><span class="guide-spinner" aria-hidden="true"></span><div><strong>${esc(phase||'Checking the selected column…')}</strong><p>Keep this page visible. Wait for the readings to finish.</p></div></div><button class="secondary" id="door-stop">Stop this check</button>`:''}

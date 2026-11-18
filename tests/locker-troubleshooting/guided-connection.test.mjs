@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {GuidedConnection, shouldProceed} from '../../locker-troubleshooting/guided-connection.js';
 
-const validReply=()=>({status:'responded',board:'C',bits:'0000000011111111'});
+const validReply=(board='C')=>({status:'responded',board,bits:'0000000011111111'});
 function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};}
 async function flush(){for(let i=0;i<12;i++)await Promise.resolve();}
 
@@ -30,7 +30,7 @@ function setup(t,{connected=false,probe=async()=>validReply(),...options}={}){
   let link=connected;
   const guide=new GuidedConnection({
     isConnected:()=>link,
-    probe:()=>{calls.push(clock.time);return probe(calls.length);},
+    probe:master=>{calls.push(clock.time);return probe(calls.length,master);},
     onChange:s=>changes.push(structuredClone(s)),onEvent:e=>events.push(e),
     now:clock.now,setTimer:clock.setTimer,clearTimer:clock.clearTimer,
     connectionWaitMs:60000,stabilityMs:60000,pollMs:3000,...options,
@@ -284,4 +284,149 @@ test('proceeding requires ready, a connected port and completed verification',()
   assert.equal(shouldProceed({...ready,connected:false}),false);
   assert.equal(shouldProceed({...ready,verifiedAt:null}),false);
   assert.equal(shouldProceed({phase:'waiting',connected:true}),false);
+});
+
+test('a configured B master ignores a C reply and starts watching only after valid B input data',async t=>{
+  const requested=[];
+  const{guide,clock,events}=setup(t,{connected:true,getMaster:()=> 'B',probe:async(n,master)=>{
+    requested.push(master);return n===1?validReply('C'):validReply('B');
+  }});
+  guide.start();await flush();
+  assert.equal(guide.snapshot().masterBoard,'B');assert.equal(guide.snapshot().phase,'waiting');
+  assert.equal(guide.snapshot().goodReplyCount,0);assert.equal(guide.snapshot().verifiedAt,null);
+  await clock.advance(3000);
+  assert.equal(guide.snapshot().phase,'watching');assert.equal(guide.snapshot().goodReplyCount,1);
+  assert.deepEqual(requested,['B','B']);
+  assert.ok(events.some(event=>event.message.includes('master B')));
+  assert.ok(events.every(event=>!event.message.includes('master C')&&!event.message.includes('Master C')));
+});
+
+test('stable B replies still require a new final B probe after the entire observation period',async t=>{
+  const final=deferred();let clock;
+  const run=setup(t,{connected:true,getMaster:()=> 'B',probe:()=>clock.time>=60000?final.promise:Promise.resolve(validReply('B'))});
+  clock=run.clock;const{guide,calls,events}=run;
+  guide.start();await flush();await clock.advance(60000);
+  assert.equal(guide.snapshot().phase,'watching');assert.equal(guide.snapshot().remainingSeconds,0);
+  assert.equal(guide.snapshot().verifiedAt,null);assert.equal(shouldProceed(guide.snapshot(),'B'),false);
+  assert.ok(calls.at(-1)>=60000);
+  final.resolve(validReply('B'));await flush();
+  assert.equal(guide.snapshot().phase,'ready');assert.equal(guide.snapshot().masterBoard,'B');
+  assert.equal(shouldProceed(guide.snapshot(),'B'),true);assert.equal(shouldProceed(guide.snapshot(),'C'),false);
+  assert.ok(events.at(-1).message.includes('Master B'));
+});
+
+test('a C response to the fresh final B probe revokes all stability proof',async t=>{
+  let clock;
+  const run=setup(t,{connected:true,getMaster:()=> 'B',probe:async()=>validReply(clock.time>=60000?'C':'B')});
+  clock=run.clock;const{guide}=run;
+  guide.start();await flush();await clock.advance(60000);
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().verifiedAt,null);
+  assert.equal(guide.snapshot().goodReplyCount,0);assert.equal(shouldProceed(guide.snapshot(),'B'),false);
+});
+
+test('changing master C to B while a probe is pending invalidates its late reply before retry',async t=>{
+  let master='C';const old=deferred(),fresh=deferred(),requested=[];
+  const{guide,clock,calls}=setup(t,{connected:true,getMaster:()=>master,probe:(n,address)=>{
+    requested.push(address);return n===1?old.promise:fresh.promise;
+  }});
+  guide.start();await flush();assert.deepEqual(requested,['C']);
+  master='B';old.resolve(validReply('C'));await flush();
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'master-changed');
+  assert.equal(guide.snapshot().verifiedAt,null);assert.equal(guide.snapshot().goodReplyCount,0);
+  assert.equal(shouldProceed(guide.snapshot(),'B'),false);assert.equal(calls.length,1);
+  guide.retry();await flush();assert.equal(guide.snapshot().masterBoard,'B');assert.deepEqual(requested,['C','B']);
+  fresh.resolve(validReply('B'));await flush();assert.equal(guide.snapshot().phase,'watching');
+  assert.equal(guide.snapshot().remainingSeconds,60);assert.equal(guide.snapshot().goodReplyCount,1);
+  assert.equal(shouldProceed(guide.snapshot(),'B'),false);
+  await clock.advance(60000);assert.equal(guide.snapshot().phase,'ready');
+  assert.equal(shouldProceed(guide.snapshot(),'B'),true);
+});
+
+test('a master change during the stable watch is noticed on the next tick without probing the new master automatically',async t=>{
+  let master='C';const requested=[];
+  const{guide,clock,calls}=setup(t,{connected:true,getMaster:()=>master,probe:async(n,address)=>{
+    requested.push(address);return validReply(address);
+  }});
+  guide.start();await flush();assert.equal(guide.snapshot().phase,'watching');
+  master='B';const before=calls.length;await clock.advance(1000);
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'master-changed');
+  assert.equal(guide.snapshot().goodReplyCount,0);assert.equal(guide.snapshot().lastReplyAt,null);
+  assert.equal(calls.length,before);assert.deepEqual(requested,['C']);
+  await clock.advance(60000);assert.equal(calls.length,before);
+});
+
+test('ready proof cannot be used for a changed master and retry waits for old in-flight work to settle',async t=>{
+  let master='C';const old=deferred(),requested=[];
+  const{guide,clock,calls}=setup(t,{connected:true,getMaster:()=>master,probe:(n,address)=>{
+    requested.push(address);return n>21&&address==='C'?old.promise:Promise.resolve(validReply(address));
+  }});
+  guide.start();await flush();await clock.advance(60000);assert.equal(guide.snapshot().phase,'ready');
+  await clock.advance(3000);assert.equal(requested.at(-1),'C');
+  master='B';
+  assert.equal(shouldProceed(guide.snapshot(),'B'),false,'the caller blocks stale proof before the next scheduled tick');
+  await clock.advance(1000);assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().verifiedAt,null);
+  const before=calls.length;guide.retry();await flush();assert.equal(guide.snapshot().masterBoard,'B');assert.equal(calls.length,before);
+  old.resolve(validReply('C'));await flush();
+  assert.equal(requested.at(-1),'B');assert.equal(guide.snapshot().phase,'watching');
+  assert.equal(guide.snapshot().goodReplyCount,1);assert.equal(shouldProceed(guide.snapshot(),'B'),false);
+});
+
+test('unconfirmed, malformed or unavailable master selections never probe or become ready',async t=>{
+  for(const getMaster of [()=>null,()=>undefined,()=>'',()=> 'b',()=> 'BC',()=> 'F',()=> 2,()=>{throw Error('No layout');}]){
+    const{guide,clock,calls,events}=setup(t,{connected:true,getMaster});
+    guide.start();await flush();await clock.advance(120000);
+    assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'layout');
+    assert.equal(guide.snapshot().masterBoard,null);assert.equal(guide.snapshot().verifiedAt,null);
+    assert.equal(guide.snapshot().goodReplyCount,0);assert.deepEqual(calls,[]);assert.equal(clock.timers.size,0);
+    assert.equal(events.at(-1).code,'LAYOUT');assert.equal(shouldProceed(guide.snapshot()),false);
+    guide.stop();
+  }
+  assert.throws(()=>new GuidedConnection({probe:async()=>validReply(),getMaster:'B'}),TypeError);
+});
+
+test('malformed B input words and replies without an addressed B master cannot establish proof',async t=>{
+  for(const reply of [
+    {status:'responded',board:'B',bits:'0'.repeat(15)},
+    {status:'responded',board:'B',bits:'0'.repeat(17)},
+    {status:'responded',board:'B',bits:'000000000000000X'},
+    {status:'responded',board:'B'},
+    {status:'responded',bits:'0'.repeat(16)},
+    {status:'no-response',board:'B',bits:'0'.repeat(16)},
+  ]){
+    const{guide,clock}=setup(t,{connected:true,getMaster:()=> 'B',probe:async()=>reply});
+    guide.start();await flush();await clock.advance(60000);
+    assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().goodReplyCount,0);
+    assert.equal(guide.snapshot().verifiedAt,null);assert.equal(shouldProceed(guide.snapshot(),'B'),false);
+    guide.stop();
+  }
+});
+
+test('master selection is recaptured on start and checked again before the deferred physical probe',async t=>{
+  let master=null;
+  const{guide,calls}=setup(t,{connected:true,getMaster:()=>master,probe:async(n,address)=>validReply(address)});
+  assert.equal(guide.snapshot().masterBoard,null);
+  master='C';guide.start();master='B';await flush();
+  assert.deepEqual(calls,[]);assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'master-changed');
+  guide.retry();await flush();
+  assert.equal(calls.length,1);assert.equal(guide.snapshot().masterBoard,'B');assert.equal(guide.snapshot().phase,'watching');
+});
+
+test('losing the confirmed master selection revokes ready proof until an explicit retry',async t=>{
+  let master='B';
+  const{guide,clock,calls}=setup(t,{connected:true,getMaster:()=>master,probe:async()=>validReply('B')});
+  guide.start();await flush();await clock.advance(60000);assert.equal(guide.snapshot().phase,'ready');
+  master=null;const before=calls.length;await clock.advance(1000);
+  assert.equal(guide.snapshot().phase,'attention');assert.equal(guide.snapshot().reason,'layout');
+  assert.equal(guide.snapshot().verifiedAt,null);assert.equal(calls.length,before);
+  master='B';await clock.advance(3000);assert.equal(guide.snapshot().phase,'attention');assert.equal(calls.length,before);
+  guide.retry();await flush();assert.equal(guide.snapshot().phase,'watching');assert.equal(guide.snapshot().masterBoard,'B');
+});
+
+test('the proceeding guard can require a matching valid master while retaining no-argument legacy compatibility',()=>{
+  const legacy={phase:'ready',connected:true,verifiedAt:60000},ready={...legacy,masterBoard:'B'};
+  assert.equal(shouldProceed(legacy),true);assert.equal(shouldProceed(ready),true);
+  assert.equal(shouldProceed(ready,'B'),true);assert.equal(shouldProceed(ready,'C'),false);
+  assert.equal(shouldProceed(legacy,'B'),false);assert.equal(shouldProceed(legacy,'C'),false);
+  for(const master of [null,undefined,'','b','BC','F',2])assert.equal(shouldProceed(ready,master),false);
+  assert.equal(shouldProceed({...ready,masterBoard:null}),false);
 });

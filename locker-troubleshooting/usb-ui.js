@@ -1,12 +1,13 @@
-import {SerialTransport} from './serial.js?v=20261118-doors';
+import {SerialTransport} from './serial.js?v=20261118-master';
 
 const BOARDS=['A','B','C','D','E'];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const stamp=()=>new Date().toISOString();
 export function changedInputs(previous,bits){return typeof previous==='string'&&typeof bits==='string'&&/^[01]{16}$/.test(previous)&&/^[01]{16}$/.test(bits)?Array.from({length:16},(_,i)=>i+1).filter(n=>previous[16-n]!==bits[16-n]):[];}
-export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,onSave=()=>{},onConnection=()=>{},onBusy=()=>{},onScanRequested=null}={}){
+export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=> 'C',onSave=()=>{},onConnection=()=>{},onBusy=()=>{},onScanRequested=null}={}){
  let transport=null,connecting=false,disconnecting=false,disconnectTask=null,operation=false,monitoring=false,monitorToken=0,token=0,intentionalClose=false,doorStop=false;
+ let connectedBoards=[];
  let data={boards:{},events:[],observations:[],checks:[],...saved};
  for(const key of ['events','observations','checks'])if(!Array.isArray(data[key]))data[key]=[];
  if(!data.boards||typeof data.boards!=='object')data.boards={};
@@ -14,10 +15,12 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,onSave=()=>{},
  let message='Connect the locker USB cable to this computer, then select its COM port.';
  let lastError='',lastConnected=false,controlsEnabled=true;
  const supported=!!navigator.serial&&window.isSecureContext;
- root.innerHTML=`<section class="usb-panel" aria-labelledby="usb-title"><div class="usb-heading"><div><span class="sidebar-title">LIVE LOCKER CONNECTION</span><h2 id="usb-title">Check the locker over USB</h2></div><span id="usb-badge" class="usb-badge">Disconnected</span></div><p id="usb-compatibility">${supported?'Use this page in desktop Chrome or Edge. Close Phil’s app and the FGS tester before connecting; only one application can use the COM port.':'Open this page in desktop Chrome or Edge to use USB serial. This browser does not provide access to the locker COM port.'}</p><div class="usb-controls"><button class="primary" id="usb-connect">Connect locker USB</button><button class="secondary" id="usb-disconnect" disabled>Disconnect</button><button class="secondary" id="usb-scan" disabled>Check installed boards</button><button class="secondary" id="usb-monitor" disabled>Watch sensor inputs</button></div><label class="usb-watch-label">Watch inputs on <select id="usb-monitor-board"><option value="all">All installed boards</option></select></label><p id="usb-message" role="status"></p><p id="usb-error" class="usb-error" role="alert"></p><div class="usb-settings">9600 baud · 8N1 · master C · USB evidence is included when you save a report</div><details id="usb-live-details"><summary>Board replies, sensor inputs and USB log</summary><p class="usb-help">Inputs 1–16 show the raw electrical value. A reply confirms communication. Input changes are observations; they do not identify a faulty component.</p><div id="usb-board-list"></div><div class="usb-log-header"><strong>Recent observations</strong><button class="text-button" id="usb-mark">Add observation marker</button></div><ul id="usb-observations" class="usb-observations"></ul><details><summary>Raw USB traffic</summary><pre id="usb-log" class="usb-log" aria-label="Raw USB traffic"></pre></details></details></section>`;
+ root.innerHTML=`<section class="usb-panel" aria-labelledby="usb-title"><div class="usb-heading"><div><span class="sidebar-title">LIVE LOCKER CONNECTION</span><h2 id="usb-title">Check the locker over USB</h2></div><span id="usb-badge" class="usb-badge">Disconnected</span></div><p id="usb-compatibility">${supported?'Use this page in desktop Chrome or Edge. Close Phil’s app and the FGS tester before connecting; only one application can use the COM port.':'Open this page in desktop Chrome or Edge to use USB serial. This browser does not provide access to the locker COM port.'}</p><div class="usb-controls"><button class="primary" id="usb-connect">Connect locker USB</button><button class="secondary" id="usb-disconnect" disabled>Disconnect</button><button class="secondary" id="usb-scan" disabled>Check installed boards</button><button class="secondary" id="usb-monitor" disabled>Watch sensor inputs</button></div><label class="usb-watch-label">Watch inputs on <select id="usb-monitor-board"><option value="all">All installed boards</option></select></label><p id="usb-message" role="status"></p><p id="usb-error" class="usb-error" role="alert"></p><div class="usb-settings" id="usb-settings"></div><details id="usb-live-details"><summary>Board replies, sensor inputs and USB log</summary><p class="usb-help">Inputs 1–16 show the raw electrical value. A reply confirms communication. Input changes are observations; they do not identify a faulty component.</p><div id="usb-board-list"></div><div class="usb-log-header"><strong>Recent observations</strong><button class="text-button" id="usb-mark">Add observation marker</button></div><ul id="usb-observations" class="usb-observations"></ul><details><summary>Raw USB traffic</summary><pre id="usb-log" class="usb-log" aria-label="Raw USB traffic"></pre></details></details></section>`;
  const $=q=>root.querySelector(q);
  function activeBoards(){const requested=getBoards();return Array.isArray(requested)?BOARDS.filter(board=>requested.includes(board)):[];}
+ function activeMaster(){const master=getMaster();return BOARDS.includes(master)&&activeBoards().includes(master)?master:null;}
  function requireBoard(board){if(!activeBoards().includes(board))throw Object.assign(Error('This board is not fitted in the selected locker layout.'),{code:'LAYOUT'});}
+ function requireCurrentMaster(){const master=activeMaster();if(!master||transport?.masterBoard!==master||connectedBoards.join('')!==activeBoards().join(''))throw Object.assign(Error('The USB connection does not match the selected master and columns. Reconnect using the correct locker layout.'),{code:'LAYOUT'});return master;}
  function refreshLayout(){const select=$('#usb-monitor-board'),previous=select.value,targets=activeBoards();select.innerHTML='<option value="all">All installed boards</option>'+targets.map(board=>`<option value="${board}">Board ${board}</option>`).join('');select.value=targets.includes(previous)?previous:'all';paint();}
  function persist(){onSave(structuredClone(data));}
  function event(e){data.events.push({...e,at:e.at||stamp()});data.events=data.events.slice(-2000);if(e.type==='error'||e.type==='warning'){data.observations.push({at:e.at||stamp(),message:e.message||e.raw||e.code||'USB message'});data.observations=data.observations.slice(-120);}persist();paintLog();}
@@ -30,23 +33,24 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,onSave=()=>{},
   const connected=!!transport?.connected,busy=connecting||disconnecting||operation||!!transport?.busy;
   $('#usb-badge').textContent=connecting?'Connecting…':monitoring?'Watching inputs':connected?'USB port open':'Disconnected';
   $('#usb-badge').classList.toggle('connected',connected);
-  $('#usb-connect').disabled=!controlsEnabled||!supported||busy||connected||!activeBoards().length;
+  $('#usb-connect').disabled=!controlsEnabled||!supported||busy||connected||!activeMaster();
   $('#usb-disconnect').disabled=!controlsEnabled||!connected||connecting||disconnecting||operation;
   $('#usb-scan').disabled=!controlsEnabled||!connected||busy||monitoring||!activeBoards().length;
   $('#usb-monitor').disabled=!controlsEnabled||!connected||(!monitoring&&busy)||!activeBoards().length;
   $('#usb-monitor').textContent=monitoring?'Stop watching':'Watch sensor inputs';$('#usb-monitor-board').disabled=!controlsEnabled||busy||monitoring;
   $('#usb-message').textContent=message;$('#usb-error').textContent=lastError;
-  $('#usb-board-list').innerHTML=activeBoards().map(b=>{const r=data.boards[b];return `<div class="usb-board"><div class="usb-board-heading"><strong>${b}${b==='C'?' · master':''}</strong><span>${r?esc(r.status==='responded'?'Reply received':r.status==='no-response'?'Reply timed out':'Check incomplete'):'Not checked'}</span><small>${r?esc(r.at.slice(11,19))+' · '+(r.elapsedMs??'—')+' ms':''}</small></div><div class="sensor-bits" aria-label="Board ${b} raw sensor inputs">${Array.from({length:16},(_,i)=>{const value=r?.status==='responded'?r.bits?.[15-i]:undefined;return `<span class="sensor-bit ${value==='1'?'one':value==='0'?'zero':''}" title="Input ${i+1}: ${value??'not read'}"><small>${i+1}</small><b>${value??'–'}</b></span>`;}).join('')}</div>${r?.error?`<p class="usb-board-error">${esc(r.error)}</p>`:''}</div>`;}).join('');paintLog();
+  $('#usb-settings').textContent=`9600 baud · 8N1 · master ${activeMaster()||'not selected'} · USB evidence is included when you save a report`;
+  $('#usb-board-list').innerHTML=activeBoards().map(b=>{const r=data.boards[b];return `<div class="usb-board"><div class="usb-board-heading"><strong>${b}${b===activeMaster()?' · master':''}</strong><span>${r?esc(r.status==='responded'?'Reply received':r.status==='no-response'?'Reply timed out':'Check incomplete'):'Not checked'}</span><small>${r?esc(r.at.slice(11,19))+' · '+(r.elapsedMs??'—')+' ms':''}</small></div><div class="sensor-bits" aria-label="Board ${b} raw sensor inputs">${Array.from({length:16},(_,i)=>{const value=r?.status==='responded'?r.bits?.[15-i]:undefined;return `<span class="sensor-bit ${value==='1'?'one':value==='0'?'zero':''}" title="Input ${i+1}: ${value??'not read'}"><small>${i+1}</small><b>${value??'–'}</b></span>`;}).join('')}</div>${r?.error?`<p class="usb-board-error">${esc(r.error)}</p>`:''}</div>`;}).join('');paintLog();
  }
  function connectionChanged(state){data.connected=state.connected;persist();const error=intentionalClose?null:state.error;if(state.connected!==lastConnected||error){lastConnected=state.connected;onConnection({connected:state.connected,error});}onBusy(state.busy);if(error){lastError=error.message||'USB connection lost.';message='Reconnect the USB port before continuing. Incomplete checks are not board failures.';stopMonitor();}paint();}
  async function connect(){
   if(connecting||disconnecting||operation||monitoring||transport?.connected||transport?.busy)return;
   if(!supported){lastError='USB access requires desktop Chrome or Edge over HTTPS or localhost.';paint();return;}
-  if(!activeBoards().length){lastError='The selected locker layout has not been confirmed. No USB checks are available.';paint();return;}
-  connecting=true;lastError='';message='Select the COM port connected to master C.';paint();onBusy(true);
+  const targets=activeBoards(),master=activeMaster();if(!master){lastError='The selected locker layout has not been confirmed. No USB checks are available.';paint();return;}
+  connecting=true;lastError='';message=`Select the COM port connected to master ${master}.`;paint();onBusy(true);
   let candidate;
-  try{const port=await navigator.serial.requestPort();candidate=new SerialTransport(port,{onEvent:event,onState:connectionChanged});transport=candidate;await candidate.open();message='USB port open. Follow the guide below to reset C and read the board inputs.';event({type:'info',message:'USB port opened at 9600 baud, 8N1. Opening a port is not a board reply.'});onConnection({connected:true});}
-  catch(e){await candidate?.close().catch(()=>{});transport=null;if(e.name==='NotFoundError'){message='Port selection cancelled. No board was checked.';}else{lastError=e.message||String(e);message='Could not open the locker COM port. Close other locker applications and try again.';event({type:'error',code:e.code||e.name,message:lastError});}onConnection({connected:false,error:e.name==='NotFoundError'?null:{code:e.code||'PORT',message:lastError}});}
+  try{const port=await navigator.serial.requestPort();if(master!==activeMaster()||targets.join('')!==activeBoards().join(''))throw Error('The locker layout changed during port selection. Choose the port again.');candidate=new SerialTransport(port,{masterBoard:master,onEvent:event,onState:connectionChanged});transport=candidate;connectedBoards=[...targets];await candidate.open();requireCurrentMaster();message=`USB port open. Follow the guide below to reset ${master} and read the board inputs.`;event({type:'info',message:`USB port opened at 9600 baud, 8N1 for master ${master}. Opening a port is not a board reply.`});onConnection({connected:true});}
+  catch(e){await candidate?.close().catch(()=>{});transport=null;connectedBoards=[];if(e.name==='NotFoundError'){message='Port selection cancelled. No board was checked.';}else{lastError=e.message||String(e);message='Could not open the locker COM port. Close other locker applications and try again.';event({type:'error',code:e.code||e.name,message:lastError});}onConnection({connected:false,error:e.name==='NotFoundError'?null:{code:e.code||'PORT',message:lastError}});}
   finally{connecting=false;onBusy(false);paint();}
  }
  function stopMonitor(){monitoring=false;monitorToken++;onBusy(false);paint();}
@@ -61,7 +65,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,onSave=()=>{},
     try{
      // A delayed close must never clear a newer port instance.
      if(transport===closingTransport){
-      transport=null;data.connected=false;
+      transport=null;connectedBoards=[];data.connected=false;
       message='USB disconnected. Reconnect before sending further checks.';
       if(intentional)lastError='';
       observe(intentional?'Operator disconnected the USB COM port.':'USB device disconnected unexpectedly.');
@@ -75,6 +79,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,onSave=()=>{},
  async function check(board){
   requireBoard(board);
   if(disconnecting||!transport?.connected)throw Object.assign(Error('Connect the locker USB port first.'),{code:'DISCONNECTED'});
+  requireCurrentMaster();
   const started=Date.now();let result;
   try{const reply=await transport.query(board);const changes=changedInputs(data.lastBits[board],reply.bits);data.lastBits[board]=reply.bits;result={...reply,status:'responded'};
    if(changes.length)observe(`Board ${board}: input${changes.length===1?'':'s'} ${changes.join(', ')} changed since the previous valid read${changes.length>1?' — multiple input changes; compare with the physical action.':'.'}`);
@@ -90,17 +95,17 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,onSave=()=>{},
   finally{operation=false;onBusy(false);paint();}
  }
  async function reset(){
-  requireBoard('C');
+  const master=requireCurrentMaster();requireBoard(master);
   if(connecting||disconnecting||operation||monitoring||transport?.busy)throw Error('Stop the current USB check first.');
   if(!transport?.connected)throw Error('Connect the locker USB port first.');
-  operation=true;onBusy(true);message='Sending RST to master C. Waiting for its five-second reset sequence…';lastError='';paint();
-  try{const r=await transport.resetMaster();observe('RST#C transmitted; reset wait completed. The subsequent ISB check verifies communication.');message='Master reset command sent and reset wait completed. Run the board checks next.';return r;}
+  operation=true;onBusy(true);message=`Sending RST to master ${master}. Waiting for its five-second reset sequence…`;lastError='';paint();
+  try{const r=await transport.resetMaster();observe(`RST#${master} transmitted; reset wait completed. The subsequent ISB check verifies communication.`);message='Master reset command sent and reset wait completed. Run the board checks next.';return r;}
   catch(e){lastError=e.message;throw e;}
   finally{operation=false;onBusy(false);paint();}
  }
  function stopDoorTest(){doorStop=true;transport?.cancelDoorPulse?.().catch(error=>showError(error));}
  function beginDoorOperation(board){
-  requireBoard(board);requireBoard('C');
+  requireBoard(board);requireCurrentMaster();
   if(connecting||disconnecting||operation||monitoring||transport?.busy)throw Error('Wait for the current USB check to finish.');
   if(!transport?.connected)throw Error('Connect the locker USB port first.');
   operation=true;doorStop=false;lastError='';onBusy(true);paint();return ++token;
@@ -108,14 +113,14 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,onSave=()=>{},
  async function openDoorTest(board,door,{shouldContinue=()=>true,onPhase=()=>{},onSample=()=>{},onCommand=()=>{}}={}){
   if(!Number.isInteger(door)||door<1||door>16)throw Error('Choose a door from 1 to 16.');
   if(transport?.activationBlocked)throw Error(transport.activationBlockReason||'Lock-off transmission was not confirmed. Stop opening doors and record the incomplete tests.');
-  const targets=activeBoards(),mine=beginDoorOperation(board),canContinue=()=>mine===token&&!doorStop&&!document.hidden&&shouldContinue()&&targets.join('')===activeBoards().join('');
+  const targets=activeBoards(),master=activeMaster(),mine=beginDoorOperation(board),canContinue=()=>mine===token&&!doorStop&&!document.hidden&&shouldContinue()&&targets.join('')===activeBoards().join('')&&master===activeMaster();
   const requireContinue=()=>{if(!canContinue())throw Object.assign(Error('Door check interrupted. No opening will be retried automatically.'),{code:'CANCELLED'});};
   const read=async(phase,value)=>{requireContinue();const result=await check(value);onSample(phase,result);return result;};
   try{
    onPhase('Recording the starting sensor inputs…');
    const first=await read('baseline',board);
    if(first.status!=='responded')throw Object.assign(Error('The selected column did not provide a valid starting reading. No opening command was sent.'),{code:'BASELINE'});
-   for(const value of targets.filter(value=>value!==board)){const result=await read('baseline',value);if(value==='C'&&result.status!=='responded')throw Object.assign(Error('Master C did not provide a valid starting reading. No opening command was sent.'),{code:'BASELINE'});}
+   for(const value of targets.filter(value=>value!==board)){const result=await read('baseline',value);if(value===master&&result.status!=='responded')throw Object.assign(Error(`Master ${master} did not provide a valid starting reading. No opening command was sent.`),{code:'BASELINE'});}
    const latest=await read('baseline',board);
    if(latest.status!=='responded')throw Object.assign(Error('The selected column stopped replying before opening. No opening command was sent.'),{code:'BASELINE'});
    requireContinue();onPhase(`Opening door ${door} on ${board}…`);
@@ -134,8 +139,8 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,onSave=()=>{},
   finally{operation=false;onBusy(false);paint();}
  }
  async function readDoorTestInputs(board,{shouldContinue=()=>true,onSample=()=>{}}={}){
-  const targets=activeBoards(),mine=beginDoorOperation(board);
-  try{for(const value of [board,...targets.filter(value=>value!==board)]){if(mine!==token||doorStop||document.hidden||!shouldContinue()||targets.join('')!==activeBoards().join(''))throw Error('Closed-input check interrupted.');onSample(await check(value));}}
+  const targets=activeBoards(),master=activeMaster(),mine=beginDoorOperation(board);
+  try{for(const value of [board,...targets.filter(value=>value!==board)]){if(mine!==token||doorStop||document.hidden||!shouldContinue()||targets.join('')!==activeBoards().join('')||master!==activeMaster())throw Error('Closed-input check interrupted.');onSample(await check(value));}}
   finally{operation=false;onBusy(false);paint();}
  }
  async function toggleMonitor(){

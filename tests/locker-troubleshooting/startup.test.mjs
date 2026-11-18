@@ -81,7 +81,7 @@ class FakeDocument{
 function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unexpected automatic Drive save.',holdDoorOpen=false,doorFailure='',doorPreflightFailure='',doorOffFailure=false}={}){
   const document=new FakeDocument(html),microtasks=[],timers=new Map(),windowListeners=new Map();
   const calls={uuid:0,usbCheck:0,usbScan:0,usbReset:0,usbConnect:0,doorOpen:0,doorRead:0,guidedStart:0,driveSave:0,library:0,reloads:0};
-  const drivePayloads=[],doorTargets=[],scanTargets=[];
+  const drivePayloads=[],doorTargets=[],scanTargets=[],queryTargets=[],resetTargets=[];
   let timerId=0,releaseDoor;
   const usbData={boards:{},lastBits:{},events:[],checks:[],observations:[],connected:usbConnected};
   const window={
@@ -92,7 +92,7 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   class GuidedConnection{
     constructor(options){this.options=options;}
     snapshot(){return{phase:'stopped',remainingSeconds:60};}
-    start(){calls.guidedStart++;this.options.probe();}
+    start(){calls.guidedStart++;this.options.probe(this.options.getMaster?.()||'C');}
     retry(){this.start();}
     stop(){}
     notifyConnection(){}
@@ -101,11 +101,11 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     async save(payload){calls.driveSave++;drivePayloads.push(clone(payload));throw Error(driveFailure);}
     openLibrary(){calls.library++;}
   }
-  function mountUsbPanel(root,{onSave,getBoards=()=>flow.BOARDS}){
+  function mountUsbPanel(root,{onSave,getBoards=()=>flow.BOARDS,getMaster=()=> 'C'}){
     const usb={connected:usbConnected,supported:true,busy:false,monitoring:false,
       snapshot:()=>clone(usbData),setControlsEnabled(){},stopMonitor(){},clear(){},showError(){},async disconnect(){},
-      async check(board='C'){assert.ok(getBoards().includes(board));calls.usbCheck++;return{board,status:'responded',bits:'0'.repeat(16)};},
-      async scan(boards,onResult=()=>{}){calls.usbScan++;scanTargets.push([...boards]);for(const board of boards){assert.ok(getBoards().includes(board));await onResult({board,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:00.000Z'});}},async reset(){calls.usbReset++;},async connect(){calls.usbConnect++;},refreshLayout(){},
+      async check(board=getMaster()){assert.ok(getBoards().includes(board));queryTargets.push(board);calls.usbCheck++;return{board,status:'responded',bits:'0'.repeat(16)};},
+      async scan(boards,onResult=()=>{}){calls.usbScan++;scanTargets.push([...boards]);for(const board of boards){assert.ok(getBoards().includes(board));await onResult({board,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:00.000Z'});}},async reset(){calls.usbReset++;resetTargets.push(getMaster());},async connect(){calls.usbConnect++;},refreshLayout(){},
       stopDoorTest(){},
       async openDoorTest(board,door,{onPhase,onSample,onCommand}){
         calls.doorOpen++;doorTargets.push({board,door});
@@ -127,7 +127,7 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     // Production ESM modules share a realm. Normalize the VM/host boundary here
     // so its plain step-log objects reach the real validator as plain objects.
     createReportRecord:(session,options)=>records.createReportRecord(structuredClone(session),options),
-    DriveReportClient,GuidedConnection,mountUsbPanel,createDoorGuide,shouldProceed:snapshot=>snapshot.phase==='ready',
+    DriveReportClient,GuidedConnection,mountUsbPanel,createDoorGuide,shouldProceed:(snapshot,master)=>snapshot.phase==='ready'&&snapshot.masterBoard===master,
     FIELD_REPORTS:{endpoint:'https://script.google.com/macros/s/TEST/exec'},
     document,window,localStorage:storage,crypto:{randomUUID(){calls.uuid++;return uuid();}},
     navigator:{clipboard:{writeText:async()=>{}}},structuredClone,
@@ -137,9 +137,11 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   function flush(){for(let runs=0;microtasks.length;runs++){assert.ok(runs<100,'boot microtasks must settle');microtasks.shift()();}}
   new vm.Script(appSource,{filename:appUrl.pathname}).runInContext(context);flush();
   const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,initial:s.initial,recheck:s.recheck,doorTests:s.doorTests,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
-  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,scanTargets,
-    enterDoorStep(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s));go('doors','Test fixture completed communication checks')",context);flush();},
-    enterInitialCheck(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s));go('initial','Test fixture completed connection check')",context);flush();},
+  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,scanTargets,queryTargets,resetTargets,
+    enterDoorStep(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('doors','Test fixture completed communication checks')",context);flush();},
+    enterInitialCheck(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('initial','Test fixture completed connection check')",context);flush();},
+    enterConnection(capacity='32'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('connect','Test fixture completed power cycle')",context);flush();},
+    readyConnection(master){context.fixtureMaster=master;vm.runInContext("connection.snapshot=()=>({phase:'ready',masterBoard:fixtureMaster,connected:true,verifiedAt:1});render()",context);flush();},
     releaseDoor(){releaseDoor?.();},
     change(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI input exists: '+id);element.value=value;element.dispatch('change');flush();},
     type(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI field exists: '+id);element.value=value;element.dispatch('input');flush();},
@@ -497,7 +499,7 @@ test('each capacity needs an explicit choice and survives the report, reload and
 });
 
 test('32- and 64-bay communication checks and door steps use only their confirmed columns',async()=>{
-  for(const [capacity,targets] of [['32',['B','C']],['64',['A','B','C','D']]]){
+  for(const [capacity,targets] of [['32',['A','B']],['64',['A','B','C','D']]]){
     const app=boot(new MemoryStorage(),{usbConnected:true});
     app.enterInitialCheck(capacity);await app.settle();
     assert.deepEqual(app.scanTargets,[targets]);
@@ -527,17 +529,17 @@ test('32- and 64-bay communication checks and door steps use only their confirme
 
 test('capacity changes reset blank door targets before testing and preserve the original capacity after evidence',async()=>{
   const app=boot();app.chooseCapacity('80');app.chooseCapacity('32');
-  assert.deepEqual(app.state().doorTests.targets,['B','C']);
+  assert.deepEqual(app.state().doorTests.targets,['A','B']);
   app.chooseCapacity('64');assert.deepEqual(app.state().doorTests.targets,['A','B','C','D']);
   app.chooseCapacity('32');app.enterDoorStep('32');
   app.selectData('data-door-setup','original');
   app.click('back');assert.equal(app.state().step,'welcome');
   app.chooseCapacity('80');assert.equal(app.state().details.lockerCapacity,'32','door-test setup evidence locks the recorded capacity');
-  assert.deepEqual(app.state().doorTests.targets,['B','C']);
+  assert.deepEqual(app.state().doorTests.targets,['A','B']);
   assert.match(app.document.querySelector('#toast').textContent,/new report/);
 });
 
-test('a partial 32-bay door-stage draft remains recoverable as read-only evidence without opening a door',async()=>{
+test('a partial 32-bay B-master door-stage draft remains recoverable as read-only evidence without opening a door',async()=>{
   const app=boot(new MemoryStorage(),{usbConnected:true});app.enterDoorStep('32');
   app.selectData('data-door-setup','original');app.change('door-number','1');app.check('door-ready');
   app.click('door-open');await app.settle();
@@ -549,4 +551,36 @@ test('a partial 32-bay door-stage draft remains recoverable as read-only evidenc
   assert.equal(reopened.state().mode,'pending');
   assert.deepEqual(reopened.state().pending.session.doorTests,original.doorTests);
   assert.equal(reopened.calls.doorOpen,0);assert.equal(app.storage.getItem(key),raw);
+});
+
+test('32-bay connection proof, reset, sidebar and door master use B while 64 and 80 keep C',async()=>{
+  for(const [capacity,master,targets] of [['32','B',['A','B']],['64','C',['A','B','C','D']],['80','C',flow.BOARDS]]){
+    const app=boot(new MemoryStorage(),{usbConnected:true});app.enterConnection(capacity);await app.settle();
+    assert.deepEqual(app.queryTargets,[master]);
+    assert.equal(app.document.querySelector('#master-tab').textContent,'Master '+master);
+    assert.equal(app.document.querySelector('#board-map-row').getAttribute('aria-label'),`Boards ${targets.join(' ')} with ${master} as master`);
+    assert.match(app.document.querySelector('#board-map-note').textContent,new RegExp('USB connects to '+master));
+    app.readyConnection(master==='B'?'C':'B');
+    assert.equal(app.document.querySelector('#next').disabled,true);app.click('next');
+    assert.equal(app.calls.usbReset,0);assert.equal(app.state().step,'connect');
+    assert.doesNotMatch(app.document.querySelector('#step').innerHTML,/We are happy with the connection/);
+    app.readyConnection(master);app.click('next');await app.settle();
+    assert.equal(app.state().step,'reset');assert.deepEqual(app.resetTargets,[master]);
+    assert.match(app.state().log.at(-1).label,new RegExp('RST#'+master));
+    app.click('next');await app.settle();assert.deepEqual(app.scanTargets,[targets]);
+    app.click('next');assert.equal(app.state().step,'doors');
+    assert.deepEqual(app.document.querySelectorAll('[data-door-bank]').map(element=>element.dataset.doorBank),targets);
+    assert.match(app.document.querySelector('#door-guide').innerHTML,new RegExp('<b>'+master+' · master</b>'));
+    assert.equal(app.state().doorTests.master,master);
+  }
+});
+
+test('32-bay setup identifies A and B and captions the C-master reference photographs as examples',()=>{
+  const app=boot();app.chooseCapacity('32');
+  assert.deepEqual(app.state().doorTests.targets,['A','B']);assert.equal(app.state().doorTests.master,'B');
+  app.click('next');assert.equal(app.state().step,'identify');
+  assert.match(app.document.querySelector('#step').innerHTML,/master B and slave A/);
+  assert.match(app.document.querySelector('#reference-caption').textContent,/C-master reference.*master B and slave A/);
+  app.click('zoom-photo');assert.equal(app.document.querySelector('#photo-dialog').open,true);
+  assert.match(app.document.querySelector('#photo-caption').textContent,/master B and slave A/);
 });

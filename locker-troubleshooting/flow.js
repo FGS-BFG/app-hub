@@ -1,5 +1,5 @@
-import {freshDoorTests,doorTestsComplete,formatDoorTests} from './door-test.js?v=20261118-layouts';
-import {ALL_BOARDS,LAYOUTS,boardsFor} from './layouts.js?v=20261118-layouts';
+import {freshDoorTests,getDoorTargets,getDoorMaster,doorTestsComplete,formatDoorTests} from './door-test.js?v=20261118-master';
+import {ALL_BOARDS,LAYOUTS,boardsFor,masterFor} from './layouts.js?v=20261118-master';
 
 export const BOARDS = ALL_BOARDS;
 export const STAGES = ['Prepare the system', 'Check every board', 'Isolate the fault', 'Test one door per column', 'Save the result'];
@@ -22,12 +22,12 @@ const validBoards=boards=>Array.isArray(boards)&&boards.length>0&&new Set(boards
 export function allChecked(results, boards=BOARDS) { return validBoards(boards)&&!!results&&boards.every(b=>STATES.includes(results[b])); }
 export function allResponded(results, boards=BOARDS) { return validBoards(boards)&&!!results&&boards.every(b=>results[b]==='responded'); }
 export function failedBoards(results, boards=BOARDS) { return validBoards(boards)?boards.filter(b=>results?.[b]==='no-response'):[]; }
-export function workingNeighbors(board, results, boards=BOARDS) {
-  if(!validBoards(boards)||!boards.includes(board)||board==='C')return[];
+export function workingNeighbors(board, results, boards=BOARDS,master='C') {
+  if(!validBoards(boards)||!BOARDS.includes(master)||!boards.includes(board)||board===master)return[];
   const neighbors=LAYOUTS['80'].adjacentSlavePairs.filter(pair=>pair.includes(board)).flatMap(pair=>pair.filter(other=>other!==board));
-  return boards.filter(other=>neighbors.includes(other)&&other!=='C'&&results?.[other]==='responded');
+  return boards.filter(other=>neighbors.includes(other)&&other!==master&&results?.[other]==='responded');
 }
-const canCompare=(s,boards)=>boards.includes('C')&&s.recheck.C==='responded'&&s.recheck[s.affected]==='no-response'&&workingNeighbors(s.affected,s.recheck,boards).includes(s.neighbor);
+const canCompare=(s,boards)=>{const master=masterFor(s);return boards.includes(master)&&s.recheck[master]==='responded'&&s.recheck[s.affected]==='no-response'&&workingNeighbors(s.affected,s.recheck,boards,master).includes(s.neighbor);};
 const currentErrors=(s,boards)=>Object.entries(s.checkErrors||{}).filter(([bank])=>!BOARDS.includes(bank)||boards.includes(bank));
 export function swapFinding(s) {
   const a=s.swapped[s.affected], b=s.swapped[s.neighbor];
@@ -49,17 +49,18 @@ export function validateStep(s) {
   if(s.step==='connector') return canCompare(s,boards)&&s.acknowledged===true;
   if(s.step==='swap') return canCompare(s,boards)&&swapFinding(s)!=='incomplete';
   if(s.step==='cable') return canCompare(s,boards)&&(STATES.includes(s.cable)||s.cable==='uncertain');
-  if(s.step==='doors') return doorTestsComplete(s.doorTests,boards);
+  if(s.step==='doors') return doorTestsComplete(s.doorTests,boards,masterFor(s));
   return true;
 }
 export function nextStep(s) {
   if(!validateStep(s)) return null;
   const boards=boardsFor(s);
+  const master=masterFor(s);
   if(s.step==='connect'&&s.connection==='unavailable') return 'selftest';
   const seq={welcome:'identify',identify:'power',power:'connect',startup:'connect',connect:'reset',reset:'initial',selftest:'retry',retry:'recheck',select:'connector',connector:'swap'};
   if(seq[s.step]) return seq[s.step];
   if(s.step==='initial') return allResponded(s.initial,boards)?'doors':'selftest';
-  if(s.step==='recheck') return allResponded(s.recheck,boards)||s.recheck.C!=='responded'||!LAYOUTS['80'].adjacentSlavePairs.some(pair=>pair.every(board=>boards.includes(board)))?'doors':'select';
+  if(s.step==='recheck') return allResponded(s.recheck,boards)||s.recheck[master]!=='responded'||!LAYOUTS['80'].adjacentSlavePairs.some(pair=>!pair.includes(master)&&pair.every(board=>boards.includes(board)))?'doors':'select';
   if(s.step==='swap') return swapFinding(s)==='moved'?'cable':'doors';
   if(s.step==='cable') return 'doors';
   if(s.step==='doors') return 'result';
@@ -67,13 +68,14 @@ export function nextStep(s) {
 }
 export function outcome(s) {
   const boards=boardsFor(s);
+  const master=masterFor(s);
   if(!boards.length)return{kind:'unresolved',title:'Locker layout is not confirmed',summary:'The selected capacity does not have a confirmed board map. Communication and door-test completion cannot be established.',next:'Record which columns are installed and confirm the master before running locker checks. No board, cable, hub or door fault has been established.'};
   const checks=allChecked(s.recheck,boards)?s.recheck:s.initial;
   const remaining=failedBoards(checks,boards);
-  if(s.connection==='unavailable') return {kind:'unresolved',title:'The USB COM connection is unavailable',summary:allChecked(s.initial,boards)?'The tester could not reconnect to master C. The repeat ISB check was not completed.':Object.keys(s.initial).length||s.usb?.checks?.length?'The USB connection was unavailable before the board checks could be completed.':'The tester could not connect to master C. No ISB checks were performed.',next:'Save the connection problem and self-test observation for support. An unavailable COM connection does not establish a board, cable or hub fault.'};
+  if(s.connection==='unavailable') return {kind:'unresolved',title:'The USB COM connection is unavailable',summary:allChecked(s.initial,boards)?`The tester could not reconnect to master ${master}. The repeat ISB check was not completed.`:Object.keys(s.initial).length||s.usb?.checks?.length?'The USB connection was unavailable before the board checks could be completed.':`The tester could not connect to master ${master}. No ISB checks were performed.`,next:'Save the connection problem and self-test observation for support. An unavailable COM connection does not establish a board, cable or hub fault.'};
   if(currentErrors(s,boards).length) return {kind:'unresolved',title:'The USB check could not be completed',summary:'USB errors, controller messages or unexpected replies prevented a reliable result. Affected checks remain incomplete.',next:'Review the raw USB log and reconnect or repeat the affected check. These messages do not establish a failed board, cable or hub.'};
   if(allResponded(checks,boards)) return {kind:'success', title:boards.length===5?'All five boards responded':boards.length===4?'All four boards responded':boards.length===2?'Both boards responded':`All ${boards.length} boards responded`, summary:'Communication was confirmed with '+(boards.length===2?boards.join(' and '):boards.slice(0,-1).join(', ')+' and '+boards.at(-1))+' during this check.', next:s.mode==='usb'?'Use Watch sensor inputs while operating one locker at a time. Select one board for more frequent reads. Keep unexpected changes in the report. This confirms communication, not every locker function.':'Keep this report as the starting point for further locker and sensor tests. This confirms communication, not every locker function.'};
-  if(allChecked(s.recheck,boards)&&s.recheck.C!=='responded') return {kind:'unresolved',title:'Master C still needs investigation',summary:'C did not respond after the master reset and repeat ISB check.',next:'The slave cable comparison cannot reliably isolate this result. Save the report for support; no board, cable or hub fault has been established.'};
+  if(allChecked(s.recheck,boards)&&s.recheck[master]!=='responded') return {kind:'unresolved',title:`Master ${master} still needs investigation`,summary:`${master} did not respond after the master reset and repeat ISB check.`,next:'The slave cable comparison cannot reliably isolate this result. Save the report for support; no board, cable or hub fault has been established.'};
   const finding=canCompare(s,boards)?swapFinding(s):'incomplete';
   if(finding==='moved'&&s.cable==='responded') return {kind:'possible',title:'The original cable could be responsible',summary:`The fault moved from ${s.affected} to ${s.neighbor} with the connection, then cleared with a known working cable.`,next:`Keep the original cable identified. The comparison used board ${s.neighbor} and the same suspect hub connection.`};
   if(finding==='moved'&&s.cable==='no-response') return {kind:'possible',title:'The hub connection could be responsible',summary:`Board ${s.neighbor} still did not respond with a known working cable on the same suspect hub connection.`,next:'Record the hub connection used and pass the results to support. This is an indication, not a confirmed hub diagnosis.'};
@@ -85,13 +87,20 @@ export function outcome(s) {
 }
 export function report(s, {savedAt = new Date().toISOString()} = {}) {
   const boards=boardsFor(s);
-  const result=outcome(s), results=r=>boards.length?boards.map(b=>`  ${b}${b==='C'?' (master)':''}: ${r[b]??'not checked'}`).join('\n'):'  Not checked: the locker layout is not confirmed.';
+  const master=masterFor(s);
+  let recordedBoards=[],recordedMaster=null,invalidContext=false;
+  try{recordedBoards=getDoorTargets(s.doorTests);recordedMaster=getDoorMaster(s.doorTests);}catch{invalidContext=true;}
+  const contextMismatch=invalidContext||recordedMaster!==master||recordedBoards.length!==boards.length||recordedBoards.some(bank=>!boards.includes(bank));
+  const resetHeading=recordedMaster?'ISB CHECK AFTER RST#'+recordedMaster:'ISB CHECK AFTER RESET (master not confirmed)';
+  const masterCaption=contextMismatch?'Current layout master':'Master board';
+  const contextNotice=contextMismatch?'\n\nRECORDED CONTROLLER CONTEXT\nRecorded columns: '+(recordedBoards.join(', ')||'Not confirmed')+'\nRecorded master: '+(recordedMaster||'Not confirmed')+'\nExpected layout columns: '+(boards.join(', ')||'Not confirmed')+'\nExpected layout master: '+(master||'Not confirmed')+'\nThe recorded controller context differs from the current capacity mapping. Stage readings and the reset heading retain their recorded context; no controller address has been rewritten.'+(invalidContext?' The recorded context could not be validated.':''):'';
+  const result=outcome(s), results=r=>recordedBoards.length?recordedBoards.map(b=>`  ${b}${b===recordedMaster?' (master)':''}: ${r[b]??'not checked'}`).join('\n'):'  Not checked: the locker layout is not confirmed.';
   const observed=value=>typeof value==='string'&&value.trim()?value:'Not recorded';
   const capacity=LOCKER_CAPACITIES.find(option=>option.id===s.details.lockerCapacity)?.label||'Not recorded';
   const selected=BOARD_CONFIGURATIONS.find(option=>option.id===s.details.boardConfiguration);
   const configuration=selected?.label||(s.details.boardConfiguration?`Unrecognised selection: ${s.details.boardConfiguration}`:'Not recorded');
   const boardConfiguration=`BOARD CONFIGURATION\nOperator-observed setup: ${configuration}\nMaster board label: ${observed(s.details.masterBoardLabel)}\nSlave board labels: ${observed(s.details.slaveBoardLabels)}\nConfiguration notes: ${observed(s.details.configurationNotes)}`;
-  return `MCI 304 LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nLocker capacity: ${capacity}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${savedAt}\n\n${boardConfiguration}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nUSB COM CONNECTION\n${s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded')}\n${s.connectionIssue?'A connection problem was recorded during this session.\n':''}\nINITIAL ISB CHECK\n${results(s.initial)}\n\nSELF-TEST\n${s.selftest||'Not performed'}\n\nISB CHECK AFTER RST#C\n${results(s.recheck)}\n\nCONNECTION COMPARISON\nOriginal affected board: ${s.affected||'Not selected'}\nAdjacent working slave: ${s.neighbor||'Not selected'}\nAfter swap: ${s.affected||'?'} ${s.swapped[s.affected]||'not checked'}; ${s.neighbor||'?'} ${s.swapped[s.neighbor]||'not checked'}\nKnown working cable on same hub connection: ${s.cable||'Not checked'}${historicalReadings(s,boards)}\n\n${formatDoorTests(s.doorTests,boards)}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(e=>`${e.at} | ${e.label}`).join('\n')}\n\n${s.mode==='usb'?'USB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator.':'Commands were sent manually in the test application. Results above were recorded by the operator.'} Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s,boards):''}`;
+  return `MCI 304 LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nLocker capacity: ${capacity}\n${masterCaption}: ${master||'Not confirmed'}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${savedAt}\n\n${boardConfiguration}${contextNotice}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nUSB COM CONNECTION\n${s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded')}\n${s.connectionIssue?'A connection problem was recorded during this session.\n':''}\nINITIAL ISB CHECK\n${results(s.initial)}\n\nSELF-TEST\n${s.selftest||'Not performed'}\n\n${resetHeading}\n${results(s.recheck)}\n\nCONNECTION COMPARISON\nOriginal affected board: ${s.affected||'Not selected'}\nAdjacent working slave: ${s.neighbor||'Not selected'}\nAfter swap: ${s.affected||'?'} ${s.swapped[s.affected]||'not checked'}; ${s.neighbor||'?'} ${s.swapped[s.neighbor]||'not checked'}\nKnown working cable on same hub connection: ${s.cable||'Not checked'}${historicalReadings(s,recordedBoards)}\n\n${formatDoorTests(s.doorTests,boards,master)}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(e=>`${e.at} | ${e.label}`).join('\n')}\n\n${s.mode==='usb'?'USB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator.':'Commands were sent manually in the test application. Results above were recorded by the operator.'} Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s,recordedBoards):''}`;
 }
 function historicalReadings(s,boards){
  const lines=[];

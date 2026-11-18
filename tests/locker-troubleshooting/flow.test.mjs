@@ -5,7 +5,7 @@ import {
   workingNeighbors, swapFinding, validateStep, nextStep, outcome, report,
 } from '../../locker-troubleshooting/flow.js';
 import {freshDoorTests} from '../../locker-troubleshooting/door-test.js';
-import {boardsFor} from '../../locker-troubleshooting/layouts.js';
+import {boardsFor,masterFor} from '../../locker-troubleshooting/layouts.js';
 
 const replies = (...failed) => Object.fromEntries(
   BOARDS.map(board => [board, failed.includes(board) ? 'no-response' : 'responded']),
@@ -27,7 +27,7 @@ test('the guide asks for board identification after location and before the powe
   assert.equal(nextStep({...s,step:'power'}),'connect');
 });
 
-test('welcome requires an explicit supported capacity and reports its readable label without inferring banks',()=>{
+test('welcome requires an explicit supported capacity and reports its readable label without assuming replies',()=>{
   assert.deepEqual(LOCKER_CAPACITIES,[{id:'80',label:'80 bays'},{id:'64',label:'64 bays'},{id:'32',label:'32 bays'}]);
   assert.equal(Object.isFrozen(LOCKER_CAPACITIES),true);
   for(const option of LOCKER_CAPACITIES){
@@ -36,8 +36,8 @@ test('welcome requires an explicit supported capacity and reports its readable l
     assert.equal(validateStep(session),true);assert.equal(nextStep(session),'identify');
     assert.ok(report(session).includes('Locker capacity: '+option.label));
     assert.deepEqual(Object.keys(session.doorTests.banks),['A','B','C','D','E']);
-    session.step='initial';session.initial={A:'responded',B:'responded'};
-    assert.equal(validateStep(session),false,'capacity alone does not supply a smaller board mapping');
+    session.step='initial';session.initial={A:'responded'};
+    assert.equal(validateStep(session),false,'capacity alone does not supply missing board replies');
   }
 });
 
@@ -50,43 +50,47 @@ test('unknown and missing capacity choices cannot advance welcome and legacy rep
   assert.match(report(old),/Locker capacity: Not recorded/);
 });
 
-test('32-bay checks require only B and master C and report both without missing A, D or E',()=>{
-  const s=freshSession();s.details.lockerCapacity='32';s.doorTests=freshDoorTests(['B','C']);
-  s.step='initial';s.initial={B:'responded',C:'responded'};
+test('32-bay checks require A and master B and report no current C, D or E',()=>{
+  const s=freshSession();s.details.lockerCapacity='32';s.doorTests=freshDoorTests(['A','B'],'B');
+  s.step='initial';s.initial={A:'responded',B:'responded'};
   assert.equal(validateStep(s),true);assert.equal(nextStep(s),'doors');
   assert.equal(allChecked(s.initial,boardsFor(s)),true);assert.equal(allResponded(s.initial,boardsFor(s)),true);
   assert.equal(outcome(s).title,'Both boards responded');
-  assert.match(outcome(s).summary,/B and C/);
+  assert.match(outcome(s).summary,/A and B/);
   const text=report(s);
-  assert.match(text,/INITIAL ISB CHECK\n  B: responded\n  C \(master\): responded/);
-  assert.doesNotMatch(text,/BANK [ADE]:|^\s+[ADE]: (?:not checked|Not captured)/m);
+  assert.match(text,/INITIAL ISB CHECK\n  A: responded\n  B \(master\): responded/);
+  assert.match(text,/Master board: B/);assert.match(text,/ISB CHECK AFTER RST#B/);
+  assert.doesNotMatch(text,/BANK [CDE]:|^\s+[CDE](?: \(master\))?: (?:not checked|Not captured)|RST#C|master C/m);
   assert.doesNotMatch(text,/A, B, C, D and E/);
 });
 
-test('32-bay cannot pass with missing or failed master C and never compares slave B against C',()=>{
-  const s=freshSession();s.details.lockerCapacity='32';s.doorTests=freshDoorTests(['B','C']);s.step='initial';s.initial={B:'responded'};
+test('32-bay cannot pass with missing or failed master B and never compares slave A against B',()=>{
+  const s=freshSession();s.details.lockerCapacity='32';s.doorTests=freshDoorTests(['A','B'],'B');s.step='initial';s.initial={A:'responded'};
   assert.equal(validateStep(s),false);assert.notEqual(outcome(s).kind,'success');
-  s.step='recheck';s.recheck={B:'responded',C:'no-response'};
-  assert.equal(nextStep(s),'doors');assert.equal(outcome(s).kind,'unresolved');assert.match(outcome(s).title,/Master C/);
-  s.recheck={B:'no-response',C:'responded'};s.affected='B';s.neighbor='C';s.step='select';
-  assert.deepEqual(workingNeighbors('B',s.recheck,boardsFor(s)),[]);
+  s.step='recheck';s.recheck={A:'responded',B:'no-response'};
+  assert.equal(nextStep(s),'doors');assert.equal(outcome(s).kind,'unresolved');assert.match(outcome(s).title,/Master B/);
+  s.recheck={A:'no-response',B:'responded'};s.affected='A';s.neighbor='B';s.step='select';
+  assert.deepEqual(workingNeighbors('A',s.recheck,boardsFor(s),masterFor(s)),[]);
   assert.equal(validateStep(s),false);assert.equal(nextStep(s),null);
   s.step='recheck';assert.equal(nextStep(s),'doors','there is no adjacent slave comparison to force');
-  s.step='swap';s.swapped={B:'responded',C:'no-response'};
+  s.step='swap';s.swapped={A:'responded',B:'no-response'};
   assert.equal(validateStep(s),false);assert.notEqual(outcome(s).kind,'possible');
 });
 
-test('32-bay door completion uses B/C targets and rejects an old five-bank target set',()=>{
+test('32-bay door completion uses A/B with master B and rejects historical target/master sets',()=>{
   const s=freshSession();s.details.lockerCapacity='32';s.step='doors';
   for(const bank of BOARDS)Object.assign(s.doorTests.banks[bank],{status:'skipped',skipReason:'No USB connection.',completedAt:'2026-11-18T12:00:00.000Z'});
   assert.equal(validateStep(s),false,'a completed five-bank section is not silently reinterpreted');
-  s.doorTests=freshDoorTests(['B','C']);
-  for(const bank of ['B','C'])Object.assign(s.doorTests.banks[bank],{status:'skipped',skipReason:'No USB connection.',completedAt:'2026-11-18T12:00:00.000Z'});
+  s.doorTests=freshDoorTests(['B','C'],'C');
+  for(const bank of ['B','C'])Object.assign(s.doorTests.banks[bank],{status:'skipped',skipReason:'Earlier layout.',completedAt:'2026-11-18T12:00:00.000Z'});
+  assert.equal(validateStep(s),false,'the earlier B/C master-C record cannot complete the corrected layout');
+  s.doorTests=freshDoorTests(['A','B'],'B');
+  for(const bank of ['A','B'])Object.assign(s.doorTests.banks[bank],{status:'skipped',skipReason:'No USB connection.',completedAt:'2026-11-18T12:00:00.000Z'});
   assert.equal(nextStep(s),'result');
 });
 
 test('an unconfirmed layout and empty board lists cannot create vacuous success',()=>{
-  const s=freshSession();s.details.lockerCapacity='48';s.initial=replies();s.recheck=replies();s.step='initial';s.doorTests=freshDoorTests([]);
+  const s=freshSession();s.details.lockerCapacity='48';s.initial=replies();s.recheck=replies();s.step='initial';s.doorTests=freshDoorTests([],null);
   assert.deepEqual(boardsFor(s),[]);assert.equal(validateStep(s),false);assert.equal(nextStep(s),null);
   assert.equal(allChecked({},[]),false);assert.equal(allResponded({},[]),false);
   assert.equal(allChecked(replies(),[]),false);assert.deepEqual(failedBoards(replies('A'),[]),[]);
@@ -120,16 +124,36 @@ test('64-bay comparisons allow A/B only; D has no adjacent slave and C remains e
 });
 
 test('actual older readings outside the current layout remain historical without changing the active diagnosis',()=>{
-  const s=freshSession();s.mode='usb';s.details.lockerCapacity='32';s.doorTests=freshDoorTests(['B','C']);
-  s.initial={A:'no-response',B:'responded',C:'responded',D:'responded'};
+  const s=freshSession();s.mode='usb';s.details.lockerCapacity='32';s.doorTests=freshDoorTests(['A','B'],'B');
+  s.initial={A:'responded',B:'responded',C:'no-response',D:'responded'};
   s.checkErrors={E:'PROTOCOL: historical unexpected data'};
   assert.equal(outcome(s).title,'Both boards responded');
   const text=report(s);
   assert.match(text,/HISTORICAL READINGS OUTSIDE THE CURRENT LAYOUT/);
-  assert.match(text,/Initial ISB A: no-response/);assert.match(text,/Initial ISB D: responded/);
+  assert.match(text,/Initial ISB C: no-response/);assert.match(text,/Initial ISB D: responded/);
   assert.match(text,/USB check E: PROTOCOL: historical unexpected data/);
   assert.match(text,/not current missing-column or fault findings/);
   assert.match(text,/INCOMPLETE USB CHECKS\nNone recorded/);
+});
+
+test('an older 32-bay B/C draft keeps its recorded master C reset and row labels when regenerated',()=>{
+  const s=freshSession();s.mode='usb';s.details.lockerCapacity='32';s.doorTests=freshDoorTests(['B','C'],'C');delete s.doorTests.master;
+  s.initial={B:'responded',C:'no-response'};s.recheck={B:'responded',C:'responded'};
+  s.log=[{at:'2026-11-18T10:00:00.000Z',label:'USB RST#C transmitted during the earlier test'}];
+  s.usb={connected:false,events:[{at:'2026-11-18T10:00:00.000Z',type:'tx',command:'RST#C',raw:'RST#C\r'}]};
+  const text=report(s);
+  assert.match(text,/Current layout master: B/);
+  assert.match(text,/RECORDED CONTROLLER CONTEXT\nRecorded columns: B, C\nRecorded master: C\nExpected layout columns: A, B\nExpected layout master: B/);
+  assert.match(text,/INITIAL ISB CHECK\n  B: responded\n  C \(master\): no-response/);
+  assert.match(text,/ISB CHECK AFTER RST#C\n  B: responded\n  C \(master\): responded/);
+  assert.match(text,/Stage readings and the reset heading retain their recorded context/);
+  assert.match(text,/USB RST#C transmitted during the earlier test/);
+  assert.ok(text.includes(JSON.stringify('RST#C\r')));
+  assert.doesNotMatch(text,/ISB CHECK AFTER RST#B|  B \(master\):/);
+  assert.equal(outcome(s).kind,'unresolved','historical scope cannot establish completion of the corrected layout');
+  const normal=report(freshSession());
+  assert.match(normal,/Master board: C/);assert.match(normal,/ISB CHECK AFTER RST#C/);
+  assert.doesNotMatch(normal,/RECORDED CONTROLLER CONTEXT/);
 });
 
 test('legacy capacity keeps historical A–E reporting and removing columns never invents new physical neighbours',()=>{

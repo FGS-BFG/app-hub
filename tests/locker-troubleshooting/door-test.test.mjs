@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import{freshDoorTests,freshBankDoorTest,getDoorTargets,validateDoorTests,doorTestsComplete,changedDoorInputs,doorTestSummary,formatDoorTests,hasDoorTestData}from'../../locker-troubleshooting/door-test.js';
+import{freshDoorTests,freshBankDoorTest,getDoorTargets,getDoorMaster,validateDoorTests,doorTestsComplete,changedDoorInputs,doorTestSummary,formatDoorTests,hasDoorTestData}from'../../locker-troubleshooting/door-test.js';
 
 const banks=['A','B','C','D','E'];
 const at='2026-11-18T11:00:00.000Z',end='2026-11-18T11:00:20.000Z';
@@ -163,27 +163,30 @@ test('two-column tests retain independent blank inactive banks and copy their st
   assert.equal(doorTestsComplete(value,['B','C']),false);
 });
 
-test('32-bay completion and reports require only the two stored columns B and C',()=>{
-  const value=freshDoorTests(['B','C']);
-  for(const bank of ['B','C'])Object.assign(value.banks[bank],{status:'skipped',skipReason:'No USB connection.',completedAt:end});
+test('32-bay completion and reports require A/B and their explicitly stored master B',()=>{
+  const value=freshDoorTests(['A','B'],'B');
+  for(const bank of ['A','B'])Object.assign(value.banks[bank],{status:'skipped',skipReason:'No USB connection.',completedAt:end});
   assert.equal(doorTestsComplete(value),true);
-  assert.equal(doorTestsComplete(value,['B','C']),true);
+  assert.equal(doorTestsComplete(value,['A','B'],'B'),true);
+  assert.equal(doorTestsComplete(value,['A','B'],'A'),false);
   assert.equal(doorTestsComplete(value,banks),false);
   assert.equal(doorTestsComplete(value,[]),false);
-  const summary=doorTestSummary(value,['B','C']);
+  const summary=doorTestSummary(value,['A','B'],'B');
   assert.equal(summary.complete,true);assert.equal(summary.skipped,2);assert.equal(summary.tested,0);assert.equal(summary.pending,0);
-  assert.deepEqual(summary.targets,['B','C']);assert.deepEqual(Object.keys(summary.banks),['B','C']);
-  assert.deepEqual(Object.keys(summary.banks.B.changes),['B','C']);
-  const text=formatDoorTests(value,['B','C']);
-  assert.match(text,/Recorded columns: B, C\./);assert.match(text,/0 tested; 2 skipped; 0 pending/);
-  assert.match(text,/BANK B:/);assert.match(text,/BANK C:/);
-  assert.doesNotMatch(text,/BANK [ADE]:|^  [ADE]:/m);
+  assert.deepEqual(summary.targets,['A','B']);assert.deepEqual(Object.keys(summary.banks),['A','B']);
+  assert.equal(summary.master,'B');assert.equal(summary.masterMatches,true);
+  assert.deepEqual(Object.keys(summary.banks.B.changes),['A','B']);
+  const text=formatDoorTests(value,['A','B'],'B');
+  assert.match(text,/Recorded columns: A, B\./);assert.match(text,/Recorded master: B\./);assert.match(text,/0 tested; 2 skipped; 0 pending/);
+  assert.match(text,/BANK A:/);assert.match(text,/BANK B:/);
+  assert.doesNotMatch(text,/BANK [CDE]:|^  [CDE]:/m);
 });
 
 test('an explicit empty target list is an unconfirmed layout and never a completed zero-column test',()=>{
-  const value=freshDoorTests([]);
+  const value=freshDoorTests([],null);
   assert.doesNotThrow(()=>validateDoorTests(value,{expectedTargets:[]}));
   assert.deepEqual(getDoorTargets(value),[]);assert.equal(hasDoorTestData(value),false);
+  assert.equal(getDoorMaster(value),null);
   assert.equal(doorTestsComplete(value),false);assert.equal(doorTestsComplete(value,[]),false);
   const summary=doorTestSummary(value,[]);
   assert.equal(summary.complete,false);assert.equal(summary.layoutConfirmed,false);
@@ -198,7 +201,7 @@ test('an explicit empty target list is an unconfirmed layout and never a complet
 test('malformed, duplicate and master-less target lists are rejected without silently discarding evidence',()=>{
   const withProperty=['B','C'];withProperty.extra='A';
   const sparse=['B','C',,];sparse.extra='A';
-  for(const targets of [null,'BC',['B'],['A','B'],['F','C'],['B','C','C'],['b','C'],withProperty,sparse]){
+  for(const targets of [null,'BC',['F','C'],['B','C','C'],['b','C'],withProperty,sparse]){
     assert.throws(()=>freshDoorTests(targets),TypeError);
     const value=freshDoorTests();value.targets=targets;
     assert.throws(()=>validateDoorTests(value),TypeError);assert.throws(()=>getDoorTargets(value),TypeError);
@@ -207,6 +210,27 @@ test('malformed, duplicate and master-less target lists are rejected without sil
   const value=freshDoorTests();value.targets=undefined;
   assert.throws(()=>validateDoorTests(value),TypeError);
   assert.throws(()=>validateDoorTests(freshDoorTests(['B','C']),{expectedTargets:['B']}),TypeError);
+  for(const targets of [['B'],['A','B']]){
+    assert.throws(()=>freshDoorTests(targets),/master/,'a new B master is not inferred from the column letters');
+    const value=freshDoorTests();value.targets=targets;
+    assert.throws(()=>getDoorMaster(value),/master/);assert.throws(()=>validateDoorTests(value),/master/);
+  }
+});
+
+test('stored master must be known and included, while missing legacy master remains C',()=>{
+  assert.equal(getDoorMaster(undefined),'C');
+  const legacy=freshDoorTests(['B','C']);delete legacy.master;
+  assert.equal(getDoorMaster(legacy),'C');assert.doesNotThrow(()=>validateDoorTests(legacy));
+  for(const master of [null,undefined,'Z','c','D',0]){
+    const value=freshDoorTests(['A','B'],'B');value.master=master;
+    assert.throws(()=>validateDoorTests(value),/master/);assert.equal(doorTestsComplete(value,['A','B'],'B'),false);
+  }
+  for(const bank of ['B','C'])Object.assign(legacy.banks[bank],{status:'skipped',skipReason:'Earlier guide record.',completedAt:end});
+  assert.equal(doorTestsComplete(legacy),true);assert.equal(doorTestsComplete(legacy,['A','B'],'B'),false);
+  const text=formatDoorTests(legacy,['A','B'],'B');
+  assert.match(text,/Recorded columns: B, C\./);assert.match(text,/Recorded master: C\./);
+  assert.match(text,/Recorded door-test master differs/);assert.match(text,/Historical evidence is retained/);
+  assert.match(text,/BANK C:/);
 });
 
 test('inactive columns cannot contain attempts or observations, including cross-column samples',()=>{
@@ -228,12 +252,12 @@ test('inactive columns cannot contain attempts or observations, including cross-
 });
 
 test('legacy missing targets retain historical five-column evidence when the current layout differs',()=>{
-  const value=skipped();delete value.targets;
+  const value=skipped();delete value.targets;delete value.master;
   const before=JSON.stringify(value);
   assert.deepEqual(getDoorTargets(value),banks);assert.equal(doorTestsComplete(value),true);
-  assert.equal(doorTestsComplete(value,['B','C']),false);
-  assert.throws(()=>validateDoorTests(value,{expectedTargets:['B','C']}),/match/);
-  const text=formatDoorTests(value,['B','C']);
+  assert.equal(doorTestsComplete(value,['A','B'],'B'),false);
+  assert.throws(()=>validateDoorTests(value,{expectedTargets:['A','B'],expectedMaster:'B'}),/match/);
+  const text=formatDoorTests(value,['A','B'],'B');
   assert.match(text,/Historical evidence is retained/);
   for(const bank of banks)assert.ok(text.includes('BANK '+bank+':'));
   assert.equal(JSON.stringify(value),before);
