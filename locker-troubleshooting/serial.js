@@ -392,6 +392,7 @@ export class SerialTransport {
         code: sample.sawData ? 'PROTOCOL' : 'TIMEOUT',
         error: sample.sawData ? 'No valid addressed input-status reply arrived during the pulse.' : 'No input-status reply arrived before the pulse deadline.',
         raw: sample.raw, at: now(), elapsedMs: Date.now() - sample.started});
+      return response;
     } catch (error) {
       evidence.samples.push({board: active.board, status: 'error', code: error.code || 'WRITE',
         error: error.message, raw: sample.raw, at: now(), elapsedMs: Date.now() - sample.started});
@@ -407,15 +408,20 @@ export class SerialTransport {
     if (typeof board !== 'string' || !/^[A-E]$/.test(board) || !Number.isInteger(door) || door < 1 || door > 16) {
       throw new SerialError('INVALID_COMMAND', 'Choose board A–E and a door number from 1 to 16.');
     }
-    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'durationMs')) {
-      throw new SerialError('INVALID_COMMAND', 'The door test accepts only its pulse duration.');
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['durationMs','untilOpen','onProgress'].includes(key))) {
+      throw new SerialError('INVALID_COMMAND', 'The door test accepts its duration and selected-sensor release mode only.');
     }
+    if(options.untilOpen!==undefined&&typeof options.untilOpen!=='boolean')throw new SerialError('INVALID_COMMAND','Selected-sensor release mode must be true or false.');
+    if(options.onProgress!==undefined&&typeof options.onProgress!=='function')throw new SerialError('INVALID_COMMAND','Release progress must be a callback.');
+    const untilOpen=options.untilOpen===true;
+    const progress=(phase,sample)=>{try{options.onProgress?.({phase,...(sample?{sample}:{}),at:now()});}catch{}};
+    const maximum=untilOpen?15000:MAX_DOOR_PULSE_MS;
     const durationMs = options.durationMs === undefined ? DEFAULT_DOOR_PULSE_MS : options.durationMs;
-    if (!Number.isInteger(durationMs) || durationMs < MIN_DOOR_PULSE_MS || durationMs > MAX_DOOR_PULSE_MS) {
-      throw new SerialError('INVALID_COMMAND', `The pulse duration must be ${MIN_DOOR_PULSE_MS}–${MAX_DOOR_PULSE_MS} milliseconds.`);
+    if (!Number.isInteger(durationMs) || durationMs < MIN_DOOR_PULSE_MS || durationMs > maximum) {
+      throw new SerialError('INVALID_COMMAND', `The pulse duration must be ${MIN_DOOR_PULSE_MS}–${maximum} milliseconds.`);
     }
     if (this.activationBlocked) throw new SerialError('ACTIVATION_BLOCKED', this.activationBlockReason);
-    const openCommand = 'LA' + (door - 1).toString(16).toUpperCase() + '#' + board;
+    const openCommand = (untilOpen?'LM':'LA') + (door - 1).toString(16).toUpperCase() + '#' + board;
     const offCommand = 'LMX#' + board;
     const active = this._reserve(openCommand, 'pulse', board, {
       openCommand, offCommand, stop: deferred(), finished: deferred(), cancelled: false,
@@ -423,7 +429,7 @@ export class SerialTransport {
     });
     const evidence = {board, door, openCommand, offCommand, durationMs, preclearAttempted: false, preclearSent: false,
       openAttempted: false, openSent: false, offAttempted: false, offSent: false,
-      offConfirmed: false, cancelled: false, at: now(), raw: '', samples: []};
+      offConfirmed: false, cancelled: false, ...(untilOpen?{releaseMode:'selected-input',sensorInput:door,openValue:'1',relockReason:''}:{}), at: now(), raw: '', samples: []};
     const snapshot = () => ({...evidence, samples: evidence.samples.map(sample => ({...sample}))});
     let error;
     try {
@@ -441,14 +447,28 @@ export class SerialTransport {
       await this._writePulseCommand(active, openCommand);
       evidence.openSent = true;
       evidence.openAt = now();
+      if(untilOpen)progress('released');
       active.pulseDeadline = Date.now() + durationMs;
       this._pulseCheck(active);
       // Query only this board while ON. A missing reply never extends the dwell.
-      await this._sampleDuringPulse(active, evidence);
-      await Promise.race([sleep(Math.max(0, active.pulseDeadline - Date.now())), active.stop.promise, active.abort.promise, this._life.promise]);
+      if(untilOpen){
+        evidence.relockReason='timeout';
+        while(Date.now()<active.pulseDeadline){
+          const response=await this._sampleDuringPulse(active,evidence);
+          if(response)progress(response.bits[16-door]==='1'?'door-open':'released',response);
+          if(response?.status==='responded'&&response.bits[16-door]==='1'){evidence.relockReason='door-open';break;}
+          if(!response){if(Date.now()>=active.pulseDeadline)break;throw new SerialError('INPUT_STATUS','The selected door sensor could not be read. Relocking early.');}
+          await Promise.race([sleep(Math.min(150,Math.max(0,active.pulseDeadline-Date.now()))),active.stop.promise,active.abort.promise,this._life.promise]);
+          this._pulseCheck(active);
+        }
+      }else{
+        await this._sampleDuringPulse(active, evidence);
+        await Promise.race([sleep(Math.max(0, active.pulseDeadline - Date.now())), active.stop.promise, active.abort.promise, this._life.promise]);
+      }
       this._pulseCheck(active);
     } catch (cause) {
       error = cause instanceof SerialError ? cause : new SerialError('WRITE', 'The door test could not finish.', cause);
+      if(untilOpen)evidence.relockReason=error.code==='CANCELLED'?'cancelled':'input-or-USB-error';
       if (active.phase === 'preclear' && evidence.preclearAttempted && error.code !== 'CANCELLED') {
         error = new SerialError('LOCK_OFF', 'The initial scoped lock-off failed. No door-open command was sent; recover the controller and use a fresh connection before another door test.', error);
         this.activationBlocked = true;
@@ -467,12 +487,14 @@ export class SerialTransport {
           evidence.offAt = now();
           await sleep(DOOR_COMMAND_SETTLE_MS);
           if (active.offError) throw active.offError;
+          if(untilOpen)progress('off');
         } catch (cause) {
           const offError = new SerialError('LOCK_OFF', 'Scoped lock-off did not complete successfully. Output state is unknown; recover the controller and use a fresh connection before another door test.', cause);
           if (error) offError.openError = {code: error.code, message: error.message};
           error = offError;
           this.activationBlocked = true;
           this.activationBlockReason = offError.message;
+          if(untilOpen)progress('uncertain');
         }
       }
       evidence.cancelled = active.cancelled;

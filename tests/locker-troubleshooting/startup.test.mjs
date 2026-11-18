@@ -1,4 +1,18 @@
 import test from 'node:test';
+test('live windows distinguish sensor-open red from the selected active release and clear green after lock-off',async()=>{
+ const app=boot(new MemoryStorage(),{usbConnected:true,holdDoorOpen:true});
+ app.enterDoorStep('32');app.selectData('data-door-setup','original');app.selectData('data-door-number','3');app.check('door-ready');
+ app.click('door-open');
+ let windows=app.document.querySelectorAll('.locker-door-window');
+ assert.equal(windows[0].classList.contains('open'),true,'input 1 open is red');
+ assert.equal(windows[4].classList.contains('released'),true,'selected door 3 is green during release');
+ assert.equal(app.document.querySelector('[data-door-number="3"]').disabled,true);
+ app.releaseDoor();await app.settle();
+ windows=app.document.querySelectorAll('.locker-door-window');
+ assert.equal(windows[4].classList.contains('released'),false,'lock-off removes green');
+ assert.equal(windows[0].classList.contains('open'),true,'red follows sensor until a new reading');
+ assert.equal(app.calls.doorOpen,1);
+});
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -134,15 +148,16 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
       },
       setDiscoveryResults(results){lastDiscoveryResults=clone(results);},
       stopDoorTest(){},
-      async openDoorTest(board,door,{onPhase,onSample,onCommand}){
+      async openDoorTest(board,door,{onPhase,onSample,onCommand,onLockState=()=>{}}){
         calls.doorOpen++;doorTargets.push({board,door});
         const sample=(value,bits)=>({board:value,status:'responded',bits,at:'2026-11-18T12:00:00.000Z',elapsedMs:5});
         requireTarget(board);for(const value of scopedBoards())onSample('baseline',sample(value,'0'.repeat(16)));
         if(doorPreflightFailure)throw Object.assign(Error(doorPreflightFailure),{code:'BASELINE'});
         onCommand({openAttempted:true,openSent:!doorFailure,offSent:true,offAttempted:true,openAt:'2026-11-18T12:00:00.100Z',offAt:'2026-11-18T12:00:00.600Z',code:doorOffFailure?'LOCK_OFF':'',error:doorOffFailure?'Controller rejected the lock-off command.':''});
-        onPhase('Watching the selected column…');
+        onLockState('released');onPhase('Watching the selected column…');
         onSample('open',sample(board,'0'.repeat(14)+'11'));
         if(holdDoorOpen)await new Promise(resolve=>{releaseDoor=resolve;});
+        onLockState('off');
         if(doorFailure||doorOffFailure)throw Error(doorFailure||'Controller rejected the lock-off command.');
       },
       async readDoorTestInputs(board,{onSample}){requireTarget(board);calls.doorRead++;for(const value of scopedBoards())onSample({board:value,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:01.000Z',elapsedMs:5});},

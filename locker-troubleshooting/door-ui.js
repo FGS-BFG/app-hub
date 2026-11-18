@@ -9,7 +9,7 @@ const answerLabel=value=>({yes:'Yes',no:'No',uncertain:'Could not confirm'}[valu
 // Rendering, selecting a bank, returning to a report and reconnecting do no I/O.
 export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(getState()),getMaster=()=>getDoorMaster(getState()),usb,isActive,onChange=()=>{},onBusy=()=>{},onEvent=()=>{}}){
  let root=null,selected='',busy=false,ready=false,error='',phase='',closedRead=false,token=0;
- let skipReason='',remainingReason='';
+ let skipReason='',remainingReason='',lockState='idle';
  const state=()=>getState();
  const targets=()=>getDoorTargets(state());
  const layoutMatches=()=>targets().length>0&&targets().join('')===getBoards().join('')&&getDoorMaster(state())===getMaster();
@@ -18,7 +18,7 @@ export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(
  function changed(){onChange();paint();}
  function setBusy(value){busy=value;onBusy(value);paint();}
  function latest(){return state().banks[selected];}
- function choose(value){if(!mutable()||!targets().includes(value))return;selected=value;ready=false;error='';phase='';closedRead=!!Object.keys(bank().snapshots.closed).length;skipReason='';paint();}
+ function choose(value){if(!mutable()||!targets().includes(value))return;selected=value;ready=false;lockState='idle';error='';phase='';closedRead=!!Object.keys(bank().snapshots.closed).length;skipReason='';paint();}
  function nextBank(){const next=targets().find(value=>!['tested','skipped'].includes(state().banks[value].status));if(next)choose(next);else paint();}
  function sampleText(record){
   const item=doorTestSummary(state()).banks[selected];
@@ -28,7 +28,10 @@ export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(
  function answers(field,label,value){return `<fieldset class="door-answer"><legend>${label}</legend><div class="choices">${['yes','no','uncertain'].map(answer=>`<button class="choice ${value===answer?'selected':''}" data-door-answer="${field}:${answer}" aria-pressed="${value===answer}" ${busy?'disabled':''}>${answerLabel(answer)}</button>`).join('')}</div></fieldset>`;}
  function doorPicker(record,attempted){
   const order=Array.from({length:8},(_,row)=>[row+1,row+9]).flat();
-  return `<fieldset class="locker-picker"><legend>Choose a door on column ${selected}.</legend><div class="locker-column"><div class="locker-column-header">COLUMN ${selected}</div><div class="locker-door-grid" aria-label="Column ${selected}: doors 1 to 8 down the left, 9 to 16 down the right">${order.map(door=>`<button type="button" class="locker-door ${record.door===door?'selected':''}" data-door-number="${door}" aria-label="Column ${selected}, door ${door}" aria-pressed="${record.door===door}" ${busy||attempted?'disabled':''}><b>${door}</b><span class="locker-door-window" aria-hidden="true"></span></button>`).join('')}</div></div><p class="locker-selection" role="status">${record.door?'Door '+record.door+' selected':'Select the door you want to test.'}</p></fieldset>`;
+  const reading=(closedRead?record.snapshots.closed[selected]:null)||[...record.samples].reverse().find(sample=>sample.board===selected)||record.snapshots.open[selected]||record.snapshots.baseline[selected]||usb.snapshot?.().boards?.[selected];
+  const bits=reading?.status==='responded'?reading.bits:null;
+  const windowState=door=>bits?.[16-door]==='1'?'open':record.door===door&&lockState==='released'?'released':record.door===door&&lockState==='uncertain'?'uncertain':'neutral';
+  return `<fieldset class="locker-picker"><legend>Choose a door on column ${selected}.</legend><div class="locker-column"><div class="locker-column-header">COLUMN ${selected}</div><div class="locker-door-grid" aria-label="Column ${selected}: doors 1 to 8 down the left, 9 to 16 down the right">${order.map(door=>`<button type="button" class="locker-door ${record.door===door?'selected':''}" data-door-number="${door}" aria-label="Column ${selected}, door ${door}, ${windowState(door)==='open'?'sensor open':windowState(door)==='released'?'release command active':windowState(door)==='uncertain'?'lock state unknown':'no active release indication'}" aria-pressed="${record.door===door}" ${busy||attempted?'disabled':''}><b>${door}</b><span class="locker-door-window ${windowState(door)}" aria-hidden="true"></span></button>`).join('')}</div></div><div class="locker-window-legend"><span><i class="open"></i> Red: sensor open</span><span><i class="released"></i> Green: release active</span><span><i class="neutral"></i> Grey: no active release indication</span></div><p class="locker-selection" role="status">${record.door?'Door '+record.door+' selected':'Select the door you want to test.'}</p></fieldset>`;
  }
  function paint(){
   if(!root||!isActive())return;
@@ -42,8 +45,8 @@ export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(
    <div class="door-bank-tabs" style="--door-columns:${targets().length}" aria-label="Columns to test">${targets().map(value=>`<button class="door-bank ${selected===value?'selected':''}" data-door-bank="${value}" aria-pressed="${selected===value}" ${busy?'disabled':''}><b>${value}${value===getMaster()?' · master':''}</b><span>${({pending:'Not tested',testing:'In progress',tested:'Result recorded',skipped:'Not completed'})[data.banks[value].status]}</span></button>`).join('')}</div>
    ${complete?'<div class="guide-status good"><div><strong>'+(data.scope==='board'?'The selected board has a recorded result.':'Every installed column has a recorded result.')+'</strong><p>Review the results below. Select Next for the final report. A recorded result can include an incomplete test.</p></div></div>':''}
    <section class="door-current" aria-label="Selected column door test"><h2>Column ${selected}${selected===getMaster()?' · master':''}</h2>
-   ${done?`<p>${record.status==='skipped'?'Not completed: '+esc(record.skipReason):`Door ${record.door}: opened — ${answerLabel(record.operator.opened)}; now closed — ${answerLabel(record.operator.closed)}.`}</p>${attempted?sampleText(record):''}<p>This recorded attempt will not open a door again.</p>`:`${doorPicker(record,attempted)}<p class="door-number-help">Door numbers 1–16 use the same output order as the locker tester. Printed board channels 0–15 correspond to doors 1–16.</p>
-   ${!attempted?`<label class="door-ready"><input id="door-ready" type="checkbox" ${ready?'checked':''} ${busy?'disabled':''}> The selected door is closed, clear and ready to open.</label><p>Stand by the selected door. Select Open door, then pull it open. Keep it open until the guide asks you to close it.</p><button class="primary" id="door-open" ${!mutable()||!usb.connected||!setupReady||!record.door||!ready?'disabled':''}>Open door ${record.door||'…'} on ${selected}</button>${!setupReady?'<p class="door-help">Record the connections above before opening a door.</p>':''}`:''}
+   ${done?`<p>${record.status==='skipped'?'Not completed: '+esc(record.skipReason):`Door ${record.door}: opened — ${answerLabel(record.operator.opened)}; now closed — ${answerLabel(record.operator.closed)}.`}</p>${attempted?sampleText(record):''}<p>This recorded attempt will not open a door again.</p>`:`${doorPicker(record,attempted)}<p class="door-number-help">Door numbers 1–16 use the same output order as the locker tester. Printed board channels 0–15 correspond to doors 1–16. Matching sensor inputs use 1 = open and 0 = closed.</p>
+   ${!attempted?`<label class="door-ready"><input id="door-ready" type="checkbox" ${ready?'checked':''} ${busy?'disabled':''}> The selected door is closed, clear and ready to open.</label><p>Select Open door, then pull the selected door open. The guide releases the lock for up to 15 seconds and relocks sooner when its sensor reports open. Keep this page visible and USB connected until lock-off is sent.</p><button class="primary" id="door-open" ${!mutable()||!usb.connected||!setupReady||!record.door||!ready?'disabled':''}>Open door ${record.door||'…'} on ${selected}</button>${!setupReady?'<p class="door-help">Record the connections above before opening a door.</p>':''}`:''}
    ${busy?`<div class="guide-status waiting"><span class="guide-spinner" aria-hidden="true"></span><div><strong>${esc(phase||'Checking the selected column…')}</strong><p>Keep this page visible. Wait for the readings to finish.</p></div></div><button class="secondary" id="door-stop">Stop this check</button>`:''}
    ${attempted&&!busy?`${sampleText(record)}${answers('opened','Did the selected door physically open?',record.operator.opened)}${record.operator.opened?`<p>Close the selected door. If it did not open, leave it closed. Then read the inputs again.</p><button class="secondary" id="door-read-closed" ${!mutable()||!usb.connected?'disabled':''}>${closedRead?'Read closed inputs again':'Read inputs after closing'}</button>${closedRead||!usb.connected?answers('closed','Is the selected door now physically closed?',record.operator.closed):''}${record.operator.opened&&record.operator.closed?'<button class="primary" id="door-complete">Record result · Next column</button>':''}`:''}`:''}
    ${!busy?`<details class="door-skip"><summary>I cannot complete this column test</summary><label class="field">Reason<textarea id="door-skip-reason" maxlength="1000" placeholder="For example: column does not reply, door inaccessible, or test interrupted.">${esc(skipReason)}</textarea></label><button class="secondary" id="door-skip" ${!skipReason.trim()?'disabled':''}>Record ${selected} as not completed</button></details>`:''}`}
@@ -68,12 +71,12 @@ export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(
   const copy=structuredClone(sample);if(copy.error)copy.error=boundedError(copy.error);
   item.snapshots[which][sample.board]=copy;
   if(which!=='baseline')item.samples.push({phase:which,...copy});
-  item.samples=item.samples.slice(-200);onChange();
+  item.samples=item.samples.slice(-200);onChange();paint();
  }
  async function openDoor(){
   const data=state(),item=bank();
   if(!mutable()||!usb.connected||!ready||!item.door||item.command.open||!(data.setup.connections==='original'||data.setup.connections==='changed'&&data.setup.note.trim()))return;
-  const ownToken=++token,ownBank=selected;error='';closedRead=false;
+  const ownToken=++token,ownBank=selected;error='';closedRead=false;lockState='idle';
   const originalDoor=item.door;Object.assign(item,freshBankDoorTest(),{door:originalDoor,status:'testing',startedAt:timestamp()});
   onEvent(`Operator requested column ${ownBank}, door ${item.door}; door confirmed clear and closed.`);setBusy(true);onChange();
   try{
@@ -81,7 +84,8 @@ export function createDoorGuide({document,getState,getBoards=()=>getDoorTargets(
     shouldContinue:()=>ownToken===token&&isActive()&&state()===data,
     onPhase:text=>{phase=text;paint();},
     onSample:(which,sample)=>storeSample(item,which,sample),
-    onCommand:evidence=>{const rejected=evidence.code==='CONTROLLER',openOk=evidence.openSent&&!rejected,offOk=evidence.offSent&&evidence.code!=='LOCK_OFF';item.command.open=evidence.openAttempted?{status:openOk?'sent':'uncertain',at:evidence.openAt||evidence.at||timestamp(),code:openOk?'':evidence.code||'',error:openOk?'':boundedError(evidence.error),raw:evidence.openCommand||''}:null;item.command.lockOff=evidence.offAttempted||evidence.offSent?{status:offOk?'sent':'uncertain',at:evidence.offAt||evidence.at||timestamp(),code:offOk?'':evidence.code||'',error:offOk?'':boundedError(evidence.error||'Lock-off transmission was not confirmed.'),raw:evidence.offCommand||''}:null;onChange();},
+    onLockState:value=>{lockState=['released','door-open'].includes(value)?'released':value==='uncertain'?'uncertain':'off';paint();},
+    onCommand:evidence=>{if(evidence.releaseMode)onEvent(`Column ${ownBank}, door ${item.door}: release limit ${evidence.durationMs} ms; matching input ${item.door}, 1=open, 0=closed; relock reason ${evidence.relockReason||'not confirmed'}.`);lockState=evidence.offSent&&evidence.code!=='LOCK_OFF'?'off':'uncertain';const rejected=evidence.code==='CONTROLLER',openOk=evidence.openSent&&!rejected,offOk=evidence.offSent&&evidence.code!=='LOCK_OFF';item.command.open=evidence.openAttempted?{status:openOk?'sent':'uncertain',at:evidence.openAt||evidence.at||timestamp(),code:openOk?'':evidence.code||'',error:openOk?'':boundedError(evidence.error),raw:evidence.openCommand||''}:null;item.command.lockOff=evidence.offAttempted||evidence.offSent?{status:offOk?'sent':'uncertain',at:evidence.offAt||evidence.at||timestamp(),code:offOk?'':evidence.code||'',error:offOk?'':boundedError(evidence.error||'Lock-off transmission was not confirmed.'),raw:evidence.offCommand||''}:null;onChange();},
    });
   }catch(cause){error=cause.message||String(cause);ready=false;onEvent(`Column ${ownBank} door check incomplete: ${error}`);}
   finally{phase='';setBusy(false);onChange();}

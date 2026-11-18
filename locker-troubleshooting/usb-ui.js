@@ -1,4 +1,4 @@
-import {SerialTransport} from './serial.js?v=20261118-master';
+import {SerialTransport} from './serial.js?v=20261118-release15';
 
 const BOARDS=['A','B','C','D','E'];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -190,7 +190,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   if(!transport?.connected)throw Error('Connect the locker USB port first.');
   operation=true;doorStop=false;lastError='';onBusy(true);paint();return ++token;
  }
- async function openDoorTest(board,door,{shouldContinue=()=>true,onPhase=()=>{},onSample=()=>{},onCommand=()=>{}}={}){
+ async function openDoorTest(board,door,{shouldContinue=()=>true,onPhase=()=>{},onSample=()=>{},onCommand=()=>{},onLockState=()=>{}}={}){
   if(!Number.isInteger(door)||door<1||door>16)throw Error('Choose a door from 1 to 16.');
   if(transport?.activationBlocked)throw Error(transport.activationBlockReason||'Lock-off transmission was not confirmed. Stop opening doors and record the incomplete tests.');
   const targets=operationBoards(),master=activeMaster(),mine=beginDoorOperation(board),canContinue=()=>mine===token&&!doorStop&&!document.hidden&&shouldContinue()&&targets.join('')===operationBoards().join('')&&master===activeMaster();
@@ -203,10 +203,12 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
    for(const value of targets.filter(value=>value!==board)){const result=await read('baseline',value);if(value===master&&result.status!=='responded')throw Object.assign(Error(`Master ${master} did not provide a valid starting reading. No opening command was sent.`),{code:'BASELINE'});}
    const latest=await read('baseline',board);
    if(latest.status!=='responded')throw Object.assign(Error('The selected column stopped replying before opening. No opening command was sent.'),{code:'BASELINE'});
-   requireContinue();onPhase(`Opening door ${door} on ${board}…`);
+   if(latest.bits[16-door]!=='0')throw Object.assign(Error('The selected door sensor is not closed (expected 0). Close the door before trying again. No opening command was sent.'),{code:'BASELINE'});
+   requireContinue();onPhase(`Releasing door ${door} on ${board} for up to 15 seconds. Open the door to relock sooner…`);
    let evidence;
-   const recordPulse=value=>{for(const sample of value.samples||[])onSample('open',sample);onCommand(value);};
-   try{evidence=await transport.pulseDoor(board,door,{durationMs:500});recordPulse(evidence);}
+   const seen=new Set(),sampleKey=sample=>JSON.stringify(sample),capture=sample=>{const key=sampleKey(sample);if(!seen.has(key)){seen.add(key);onSample('open',sample);}};
+   const recordPulse=value=>{for(const sample of value.samples||[])capture(sample);onCommand(value);};
+   try{evidence=await transport.pulseDoor(board,door,{durationMs:15000,untilOpen:true,onProgress:progress=>{if(progress.sample)capture(progress.sample);onLockState(progress.phase);}});recordPulse(evidence);}
    catch(error){if(error.evidence)recordPulse({...error.evidence,code:error.code||'OUTPUT',error:error.message});throw error;}
    if(evidence.cancelled)throw Object.assign(Error('The opening check was stopped. Record the physical result before continuing.'),{code:'CANCELLED'});
    requireContinue();onPhase('Keep the selected door open. Watching its column for 10 seconds…');

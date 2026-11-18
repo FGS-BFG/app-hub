@@ -1,4 +1,21 @@
 import test from 'node:test';
+test('release progress reaches the live diagram without duplicating its input sample',async()=>{
+ const states=[],samples=[];
+ const run=await setup({pulse:(board,door,make)=>{
+  const sample={...run.reading(board,'0'.repeat(15)+'1'),status:'responded'};
+  const progress=run.calls.pulses.at(-1).options.onProgress;
+  progress({phase:'released'});progress({phase:'door-open',sample});progress({phase:'off'});
+  return make(board,{samples:[sample]});
+ }});
+ await run.finish(run.panel.openDoorTest('A',1,{onLockState:state=>states.push(state),onSample:(phase,result)=>samples.push({phase,result})}));
+ assert.deepEqual(states,['released','door-open','off']);
+ assert.equal(samples.filter(item=>item.phase==='open'&&item.result.bits==='0'.repeat(15)+'1').length,1);
+});
+test('an already-open selected sensor prevents any release command',async()=>{
+ const run=await setup({query:(board,count,reading)=>reading(board,'1'.repeat(16))});
+ await assert.rejects(run.panel.openDoorTest('A',1),/sensor is not closed/);
+ assert.equal(run.calls.pulses.length,0);
+});
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -89,7 +106,8 @@ test('one explicit attempt pulses only the chosen bank and door and retains puls
   await run.finish(pending);
   assert.equal(run.calls.pulses.length,1);
   assert.equal(run.calls.pulses[0].board,'D');assert.equal(run.calls.pulses[0].door,11);
-  assert.equal(run.calls.pulses[0].options.durationMs,500);
+  assert.equal(run.calls.pulses[0].options.durationMs,15000);
+  assert.equal(run.calls.pulses[0].options.untilOpen,true);
   assert.deepEqual(run.calls.queries.slice(0,6),['D','A','B','C','E','D']);
   assert.equal(commands.length,1);
   assert.ok(samples.some(sample=>sample.phase==='open'&&sample.result.board==='D'&&sample.result.bits==='0000000000000001'));

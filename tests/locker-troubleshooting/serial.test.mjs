@@ -1,4 +1,39 @@
 import test from 'node:test';
+test('selected-sensor release ignores other inputs and relocks as soon as the matching input opens',async t=>{
+ let reads=0;
+ const {transport,port}=await opened(t,{onCommand(command,p){
+  if(command==='ISB#A\r')p.send(frame('A',++reads===1?'1000000000000000':'1000000000000001'));
+ }});
+ const started=Date.now();
+ const evidence=await transport.pulseDoor('A',1,{durationMs:15000,untilOpen:true});
+ assert.ok(Date.now()-started<2000);
+ assert.equal(reads,2);assert.equal(evidence.relockReason,'door-open');
+ assert.equal(evidence.openCommand,'LM0#A');assert.equal(evidence.offSent,true);
+ assert.equal(evidence.sensorInput,1);assert.equal(evidence.openValue,'1');
+ assert.deepEqual(port.commands,['LMX#A\r','LM0#A\r','ISB#A\r','ISB#A\r','LMX#A\r']);
+});
+test('selected-sensor release reaches its deadline without waiting for a missing input reply',async t=>{
+ const {transport,port}=await opened(t,{}, {timeout:1500});
+ const started=Date.now();
+ const evidence=await transport.pulseDoor('B',16,{durationMs:100,untilOpen:true});
+ assert.ok(Date.now()-started<700);assert.equal(evidence.relockReason,'timeout');
+ assert.equal(evidence.offSent,true);assert.ok(port.commands.includes('LMF#B\r'));
+});
+test('selected-sensor read failure relocks early and records an incomplete check',async t=>{
+ const {transport,port}=await opened(t,{}, {timeout:40});
+ const started=Date.now();
+ await assert.rejects(transport.pulseDoor('A',1,{durationMs:15000,untilOpen:true}),error=>{
+  assert.equal(error.code,'INPUT_STATUS');assert.equal(error.evidence.offSent,true);
+  assert.equal(error.evidence.relockReason,'input-or-USB-error');return true;
+ });
+ assert.ok(Date.now()-started<800);assert.equal(port.commands.at(-1),'LMX#A\r');
+});
+test('selected-sensor mode validates its explicit flag and fifteen-second maximum before I/O',async t=>{
+ const {transport,port}=await opened(t);
+ for(const options of [{durationMs:15001,untilOpen:true},{durationMs:15000,untilOpen:'yes'}])
+  await assert.rejects(transport.pulseDoor('A',1,options),isCode('INVALID_COMMAND'));
+ assert.deepEqual(port.commands,[]);
+});
 import assert from 'node:assert/strict';
 import { SerialTransport, SerialError, DEFAULT_DOOR_PULSE_MS, MIN_DOOR_PULSE_MS,
   MAX_DOOR_PULSE_MS } from '../../locker-troubleshooting/serial.js';
