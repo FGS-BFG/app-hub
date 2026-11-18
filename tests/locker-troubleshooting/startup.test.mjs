@@ -7,6 +7,7 @@ import * as records from '../../locker-troubleshooting/report-record.js';
 import * as driveHelpers from '../../locker-troubleshooting/drive-reports.js';
 import * as storageHelpers from '../../locker-troubleshooting/test-storage.js';
 import * as doorTests from '../../locker-troubleshooting/door-test.js';
+import * as layouts from '../../locker-troubleshooting/layouts.js';
 import {createDoorGuide} from '../../locker-troubleshooting/door-ui.js';
 
 const appUrl=new URL('../../locker-troubleshooting/app.js',import.meta.url);
@@ -80,7 +81,7 @@ class FakeDocument{
 function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unexpected automatic Drive save.',holdDoorOpen=false,doorFailure='',doorPreflightFailure='',doorOffFailure=false}={}){
   const document=new FakeDocument(html),microtasks=[],timers=new Map(),windowListeners=new Map();
   const calls={uuid:0,usbCheck:0,usbScan:0,usbReset:0,usbConnect:0,doorOpen:0,doorRead:0,guidedStart:0,driveSave:0,library:0,reloads:0};
-  const drivePayloads=[],doorTargets=[];
+  const drivePayloads=[],doorTargets=[],scanTargets=[];
   let timerId=0,releaseDoor;
   const usbData={boards:{},lastBits:{},events:[],checks:[],observations:[],connected:usbConnected};
   const window={
@@ -100,16 +101,16 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     async save(payload){calls.driveSave++;drivePayloads.push(clone(payload));throw Error(driveFailure);}
     openLibrary(){calls.library++;}
   }
-  function mountUsbPanel(root,{onSave}){
+  function mountUsbPanel(root,{onSave,getBoards=()=>flow.BOARDS}){
     const usb={connected:usbConnected,supported:true,busy:false,monitoring:false,
       snapshot:()=>clone(usbData),setControlsEnabled(){},stopMonitor(){},clear(){},showError(){},async disconnect(){},
-      async check(){calls.usbCheck++;return{board:'C',status:'responded',bits:'0'.repeat(16)};},
-      async scan(){calls.usbScan++;},async reset(){calls.usbReset++;},async connect(){calls.usbConnect++;},
+      async check(board='C'){assert.ok(getBoards().includes(board));calls.usbCheck++;return{board,status:'responded',bits:'0'.repeat(16)};},
+      async scan(boards,onResult=()=>{}){calls.usbScan++;scanTargets.push([...boards]);for(const board of boards){assert.ok(getBoards().includes(board));await onResult({board,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:00.000Z'});}},async reset(){calls.usbReset++;},async connect(){calls.usbConnect++;},refreshLayout(){},
       stopDoorTest(){},
       async openDoorTest(board,door,{onPhase,onSample,onCommand}){
         calls.doorOpen++;doorTargets.push({board,door});
         const sample=(value,bits)=>({board:value,status:'responded',bits,at:'2026-11-18T12:00:00.000Z',elapsedMs:5});
-        for(const value of flow.BOARDS)onSample('baseline',sample(value,'0'.repeat(16)));
+        assert.ok(getBoards().includes(board));for(const value of getBoards())onSample('baseline',sample(value,'0'.repeat(16)));
         if(doorPreflightFailure)throw Object.assign(Error(doorPreflightFailure),{code:'BASELINE'});
         onCommand({openAttempted:true,openSent:!doorFailure,offSent:true,offAttempted:true,openAt:'2026-11-18T12:00:00.100Z',offAt:'2026-11-18T12:00:00.600Z',code:doorOffFailure?'LOCK_OFF':'',error:doorOffFailure?'Controller rejected the lock-off command.':''});
         onPhase('Watching the selected column…');
@@ -117,12 +118,12 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
         if(holdDoorOpen)await new Promise(resolve=>{releaseDoor=resolve;});
         if(doorFailure||doorOffFailure)throw Error(doorFailure||'Controller rejected the lock-off command.');
       },
-      async readDoorTestInputs(board,{onSample}){calls.doorRead++;for(const value of flow.BOARDS)onSample({board:value,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:01.000Z',elapsedMs:5});},
+      async readDoorTestInputs(board,{onSample}){calls.doorRead++;for(const value of getBoards())onSample({board:value,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:01.000Z',elapsedMs:5});},
     };
     onSave(clone(usbData));return usb;
   }
   const setTimer=callback=>{const id=timerId++;timers.set(id,callback);return id;};
-  const context=vm.createContext({...flow,...records,...driveHelpers,...storageHelpers,...doorTests,
+  const context=vm.createContext({...flow,...records,...driveHelpers,...storageHelpers,...doorTests,...layouts,
     // Production ESM modules share a realm. Normalize the VM/host boundary here
     // so its plain step-log objects reach the real validator as plain objects.
     createReportRecord:(session,options)=>records.createReportRecord(structuredClone(session),options),
@@ -136,8 +137,9 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   function flush(){for(let runs=0;microtasks.length;runs++){assert.ok(runs<100,'boot microtasks must settle');microtasks.shift()();}}
   new vm.Script(appSource,{filename:appUrl.pathname}).runInContext(context);flush();
   const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,initial:s.initial,recheck:s.recheck,doorTests:s.doorTests,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
-  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,
-    enterDoorStep(){vm.runInContext("go('doors','Test fixture completed communication checks')",context);flush();},
+  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,scanTargets,
+    enterDoorStep(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s));go('doors','Test fixture completed communication checks')",context);flush();},
+    enterInitialCheck(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s));go('initial','Test fixture completed connection check')",context);flush();},
     releaseDoor(){releaseDoor?.();},
     change(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI input exists: '+id);element.value=value;element.dispatch('change');flush();},
     type(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI field exists: '+id);element.value=value;element.dispatch('input');flush();},
@@ -492,4 +494,59 @@ test('each capacity needs an explicit choice and survives the report, reload and
     reopened.click('recover-reports');await reopened.openRecovery(frozen.id);
     assert.deepEqual(reopened.state().pending,frozen);noAutomaticIO(reopened);
   }
+});
+
+test('32- and 64-bay communication checks and door steps use only their confirmed columns',async()=>{
+  for(const [capacity,targets] of [['32',['B','C']],['64',['A','B','C','D']]]){
+    const app=boot(new MemoryStorage(),{usbConnected:true});
+    app.enterInitialCheck(capacity);await app.settle();
+    assert.deepEqual(app.scanTargets,[targets]);
+    assert.deepEqual(Object.keys(app.state().initial),targets);
+    assert.equal(app.document.querySelector('#next').disabled,false);
+    app.click('next');assert.equal(app.state().step,'doors');
+    assert.deepEqual(app.document.querySelectorAll('[data-door-bank]').map(element=>element.dataset.doorBank),targets);
+    app.selectData('data-door-setup','original');
+    for(const [index,board] of targets.entries()){
+      app.selectData('data-door-bank',board);app.change('door-number',String(index+1));app.check('door-ready');
+      app.click('door-open');await app.settle();
+      app.selectData('data-door-answer','opened:yes');app.click('door-read-closed');await app.settle();
+      app.selectData('data-door-answer','closed:yes');app.click('door-complete');
+      assert.equal(app.document.querySelector('#next').disabled,index!==targets.length-1);
+    }
+    assert.deepEqual(app.doorTargets,targets.map((board,index)=>({board,door:index+1})));
+    app.click('next');assert.equal(app.state().step,'result');
+    app.click('save-result');await app.settle();
+    const frozen=app.state().pending;assert.ok(frozen);
+    assert.deepEqual(frozen.session.doorTests.targets,targets);
+    const text=frozen.reportText;
+    for(const absent of flow.BOARDS.filter(board=>!targets.includes(board)))assert.doesNotMatch(text,new RegExp('BANK '+absent+':'));
+    assert.match(text,new RegExp('Locker capacity: '+capacity+' bays'));
+    assert.equal(app.calls.doorOpen,targets.length);
+  }
+});
+
+test('capacity changes reset blank door targets before testing and preserve the original capacity after evidence',async()=>{
+  const app=boot();app.chooseCapacity('80');app.chooseCapacity('32');
+  assert.deepEqual(app.state().doorTests.targets,['B','C']);
+  app.chooseCapacity('64');assert.deepEqual(app.state().doorTests.targets,['A','B','C','D']);
+  app.chooseCapacity('32');app.enterDoorStep('32');
+  app.selectData('data-door-setup','original');
+  app.click('back');assert.equal(app.state().step,'welcome');
+  app.chooseCapacity('80');assert.equal(app.state().details.lockerCapacity,'32','door-test setup evidence locks the recorded capacity');
+  assert.deepEqual(app.state().doorTests.targets,['B','C']);
+  assert.match(app.document.querySelector('#toast').textContent,/new report/);
+});
+
+test('a partial 32-bay door-stage draft remains recoverable as read-only evidence without opening a door',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true});app.enterDoorStep('32');
+  app.selectData('data-door-setup','original');app.change('door-number','1');app.check('door-ready');
+  app.click('door-open');await app.settle();
+  const original=app.state(),key=storageHelpers.draftKey(original.id),raw=app.storage.getItem(key);
+  assert.ok(raw);assert.equal(JSON.parse(raw).step,'doors');
+  const reopened=boot(app.storage);freshWelcome(reopened,[original.id]);
+  reopened.click('recover-reports');assert.ok(reopened.recoveries().some(item=>item.id===original.id));
+  await reopened.openRecovery(original.id);
+  assert.equal(reopened.state().mode,'pending');
+  assert.deepEqual(reopened.state().pending.session.doorTests,original.doorTests);
+  assert.equal(reopened.calls.doorOpen,0);assert.equal(app.storage.getItem(key),raw);
 });

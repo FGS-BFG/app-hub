@@ -1,10 +1,10 @@
-import {hasReportData, payloadForDrive} from './report-record.js?v=20261118-capacity';
+import {hasReportData, payloadForDrive} from './report-record.js?v=20261118-layouts';
 import {buildReportPayload, validateSaveResult} from './drive-reports.js';
 
 export const STORAGE_PREFIX = 'fgs-mci-guided-usb-v4';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STEPS = new Set(['welcome', 'identify', 'power', 'startup', 'connect', 'reset', 'initial',
-  'selftest', 'retry', 'recheck', 'select', 'connector', 'swap', 'cable', 'result']);
+  'selftest', 'retry', 'recheck', 'select', 'connector', 'swap', 'cable', 'doors', 'result']);
 const BOARDS = new Set(['A', 'B', 'C', 'D', 'E']);
 const STATES = new Set(['responded', 'no-response']);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

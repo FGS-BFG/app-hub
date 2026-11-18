@@ -1,7 +1,7 @@
 .door-setup,.door-skip{margin:20px 0;padding:16px;border:1px solid var(--line);border-radius:10px;background:#f8faf7}
 .door-setup summary,.door-skip summary{cursor:pointer;font-size:13px;font-weight:650}
 .door-setup p,.door-current p,.door-result p{font-size:13px;line-height:1.7}
-.door-bank-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:24px 0}
+.door-bank-tabs{display:grid;grid-template-columns:repeat(var(--door-columns,5),minmax(0,1fr));gap:8px;margin:24px 0}
 .door-bank{padding:12px 5px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);text-align:center;min-width:0}
 .door-bank.selected{border-color:var(--teal);background:var(--pale);box-shadow:0 0 0 1px var(--teal)}
 .door-bank b,.door-bank span{display:block}.door-bank b{font-size:14px}.door-bank span{font-size:10px;line-height:1.5;margin-top:6px;color:var(--muted)}

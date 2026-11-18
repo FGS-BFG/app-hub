@@ -1,5 +1,5 @@
-import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-capacity';
-import {validateDoorTests,hasDoorTestData} from './door-test.js?v=20261118-doors';
+import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-layouts';
+import {validateDoorTests,hasDoorTestData} from './door-test.js?v=20261118-layouts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fields = ['id', 'savedAt', 'title', 'location', 'technician', 'reportText'];
@@ -82,6 +82,8 @@ function validateSession(session) {
       invalid('step records must contain a timestamp and label.');
     }
   }
+  // Validate the stored targets, preserving historical target-less five-bank
+  // drafts. Current-layout completion is checked by the workflow, not by a save.
   validateDoorTests(session.doorTests);
 }
 
@@ -132,6 +134,8 @@ export function payloadForDrive(record) {
   }
   if (!isObject(record.session)) invalid('saved session must be an object.');
   validateCapacity(record.session.details);
+  // A previous capacity-only guide could record all five banks for a 32-bay
+  // locker. Retrying its frozen text must not reassign or erase those targets.
   validateDoorTests(record.session.doorTests);
   // Retries send exactly the saved text. Never regenerate an old report using a
   // newer outcome/formatter, which may legitimately use different wording.

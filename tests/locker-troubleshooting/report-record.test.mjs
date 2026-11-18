@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {freshSession, report} from '../../locker-troubleshooting/flow.js';
+import {freshDoorTests,getDoorTargets} from '../../locker-troubleshooting/door-test.js';
 import {
   createReportRecord, payloadForDrive, hasReportData,
 } from '../../locker-troubleshooting/report-record.js';
@@ -321,5 +322,50 @@ test('the JSON cloning fallback also isolates and freezes nested evidence', () =
     assert.deepEqual(payloadForDrive(record), payloadForDrive(roundTrip(record)));
   } finally {
     globalThis.structuredClone = original;
+  }
+});
+
+test('32-bay target lists and their two-column report text are frozen independently of later draft changes',()=>{
+  const session=freshSession();session.details.lockerCapacity='32';session.doorTests=freshDoorTests(['B','C']);
+  for(const bank of ['B','C'])Object.assign(session.doorTests.banks[bank],{status:'skipped',skipReason:'USB unavailable.',completedAt:savedAt});
+  const record=createReportRecord(session,options),payload=payloadForDrive(roundTrip(record));
+  assert.deepEqual(getDoorTargets(record.session.doorTests),['B','C']);
+  assert.equal(Object.isFrozen(record.session.doorTests.targets),true);
+  assert.match(payload.reportText,/Recorded columns: B, C\./);
+  const doorSection=payload.reportText.split('ONE DOOR PER COLUMN')[1].split('\nNOTES\n')[0];
+  assert.match(doorSection,/BANK B:/);assert.match(doorSection,/BANK C:/);assert.doesNotMatch(doorSection,/BANK [ADE]:/);
+  session.doorTests.targets.push('A');session.doorTests.banks.A.door=6;
+  assert.deepEqual(record.session.doorTests.targets,['B','C']);assert.equal(record.session.doorTests.banks.A.door,null);
+  assert.equal(payloadForDrive(roundTrip(record)).reportText,payload.reportText);
+});
+
+test('unconfirmed 64-bay reports remain saveable without invented column assignments or zero-test completion',()=>{
+  const session=freshSession();session.details.lockerCapacity='64';session.doorTests=freshDoorTests([]);
+  const record=createReportRecord(session,options),payload=payloadForDrive(roundTrip(record));
+  assert.deepEqual(record.session.doorTests.targets,[]);
+  assert.match(payload.reportText,/Locker capacity: 64 bays/);
+  assert.match(payload.reportText,/Layout unconfirmed\. No columns are assigned; door tests are incomplete/);
+  assert.doesNotMatch(payload.reportText.split('ONE DOOR PER COLUMN')[1],/BANK [A-E]:/);
+  const blank=freshSession();blank.doorTests=freshDoorTests([]);assert.equal(hasReportData(blank),false);
+});
+
+test('frozen legacy 32-bay all-five-bank evidence retries unchanged rather than being reclassified',()=>{
+  const session=recordedSession();session.details.lockerCapacity='32';delete session.doorTests.targets;
+  session.doorTests.banks.A.door=6;
+  const restored=roundTrip(createReportRecord(session,options));
+  restored.title='Earlier guide wording';restored.reportText='Earlier all-five-bank report\nSaved: '+savedAt+'\nBANK A: selected door 6';
+  const before=JSON.stringify(restored),payload=payloadForDrive(restored);
+  assert.equal(payload.reportText,restored.reportText);assert.equal(payload.savedAt,savedAt);assert.equal(payload.id,id);
+  assert.deepEqual(getDoorTargets(restored.session.doorTests),['A','B','C','D','E']);
+  assert.equal(restored.session.doorTests.banks.A.door,6);assert.equal(JSON.stringify(restored),before);
+});
+
+test('malformed target lists and hidden inactive-bank evidence are rejected before saving or retrying',()=>{
+  const session=freshSession();session.details.lockerCapacity='32';session.doorTests=freshDoorTests(['B','C']);
+  const original=roundTrip(createReportRecord(session,options));
+  for(const mutate of [value=>value.targets=['B','C','C'],value=>value.targets=['B'],value=>value.banks.A.door=1,
+    value=>value.banks.B.samples=[{phase:'open',board:'A',status:'no-response',at:savedAt}]]){
+    const current=structuredClone(session);mutate(current.doorTests);assert.throws(()=>createReportRecord(current,options),TypeError);
+    const restored=roundTrip(original);mutate(restored.session.doorTests);assert.throws(()=>payloadForDrive(restored),TypeError);
   }
 });

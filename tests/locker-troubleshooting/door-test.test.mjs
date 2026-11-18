@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import{freshDoorTests,freshBankDoorTest,validateDoorTests,doorTestsComplete,changedDoorInputs,doorTestSummary,formatDoorTests,hasDoorTestData}from'../../locker-troubleshooting/door-test.js';
+import{freshDoorTests,freshBankDoorTest,getDoorTargets,validateDoorTests,doorTestsComplete,changedDoorInputs,doorTestSummary,formatDoorTests,hasDoorTestData}from'../../locker-troubleshooting/door-test.js';
 
 const banks=['A','B','C','D','E'];
 const at='2026-11-18T11:00:00.000Z',end='2026-11-18T11:00:20.000Z';
@@ -148,4 +148,93 @@ test('door selections, setup notes and captured evidence are meaningful while in
     const value=freshDoorTests();change(value);assert.equal(hasDoorTestData(value),true);
   }
   assert.equal(hasDoorTestData({version:99}),true,'malformed evidence is never silently treated as an empty draft');
+});
+
+test('two-column tests retain independent blank inactive banks and copy their stored target list',()=>{
+  const targets=['B','C'],value=freshDoorTests(targets);
+  targets.push('A');
+  assert.deepEqual(getDoorTargets(value),['B','C']);
+  assert.deepEqual(Object.keys(value.banks),banks);
+  for(const bank of ['A','D','E'])assert.deepEqual(value.banks[bank],freshBankDoorTest());
+  const returned=getDoorTargets(value);returned.push('E');
+  assert.deepEqual(value.targets,['B','C']);
+  assert.doesNotThrow(()=>validateDoorTests(value,{expectedTargets:['C','B']}));
+  assert.equal(hasDoorTestData(value),false);
+  assert.equal(doorTestsComplete(value,['B','C']),false);
+});
+
+test('32-bay completion and reports require only the two stored columns B and C',()=>{
+  const value=freshDoorTests(['B','C']);
+  for(const bank of ['B','C'])Object.assign(value.banks[bank],{status:'skipped',skipReason:'No USB connection.',completedAt:end});
+  assert.equal(doorTestsComplete(value),true);
+  assert.equal(doorTestsComplete(value,['B','C']),true);
+  assert.equal(doorTestsComplete(value,banks),false);
+  assert.equal(doorTestsComplete(value,[]),false);
+  const summary=doorTestSummary(value,['B','C']);
+  assert.equal(summary.complete,true);assert.equal(summary.skipped,2);assert.equal(summary.tested,0);assert.equal(summary.pending,0);
+  assert.deepEqual(summary.targets,['B','C']);assert.deepEqual(Object.keys(summary.banks),['B','C']);
+  assert.deepEqual(Object.keys(summary.banks.B.changes),['B','C']);
+  const text=formatDoorTests(value,['B','C']);
+  assert.match(text,/Recorded columns: B, C\./);assert.match(text,/0 tested; 2 skipped; 0 pending/);
+  assert.match(text,/BANK B:/);assert.match(text,/BANK C:/);
+  assert.doesNotMatch(text,/BANK [ADE]:|^  [ADE]:/m);
+});
+
+test('an explicit empty target list is an unconfirmed layout and never a completed zero-column test',()=>{
+  const value=freshDoorTests([]);
+  assert.doesNotThrow(()=>validateDoorTests(value,{expectedTargets:[]}));
+  assert.deepEqual(getDoorTargets(value),[]);assert.equal(hasDoorTestData(value),false);
+  assert.equal(doorTestsComplete(value),false);assert.equal(doorTestsComplete(value,[]),false);
+  const summary=doorTestSummary(value,[]);
+  assert.equal(summary.complete,false);assert.equal(summary.layoutConfirmed,false);
+  assert.equal(summary.tested,0);assert.equal(summary.skipped,0);assert.equal(summary.pending,0);assert.deepEqual(summary.banks,{});
+  const text=formatDoorTests(value,[]);
+  assert.match(text,/Layout unconfirmed\. No columns are assigned; door tests are incomplete/);
+  assert.doesNotMatch(text,/BANK [A-E]:|Recorded attempts:/);
+  Object.assign(value.banks.C,{status:'skipped',skipReason:'No layout.',completedAt:end});
+  assert.throws(()=>validateDoorTests(value),/inactive/);
+});
+
+test('malformed, duplicate and master-less target lists are rejected without silently discarding evidence',()=>{
+  const withProperty=['B','C'];withProperty.extra='A';
+  const sparse=['B','C',,];sparse.extra='A';
+  for(const targets of [null,'BC',['B'],['A','B'],['F','C'],['B','C','C'],['b','C'],withProperty,sparse]){
+    assert.throws(()=>freshDoorTests(targets),TypeError);
+    const value=freshDoorTests();value.targets=targets;
+    assert.throws(()=>validateDoorTests(value),TypeError);assert.throws(()=>getDoorTargets(value),TypeError);
+    assert.equal(doorTestsComplete(value),false);assert.equal(hasDoorTestData(value),true);
+  }
+  const value=freshDoorTests();value.targets=undefined;
+  assert.throws(()=>validateDoorTests(value),TypeError);
+  assert.throws(()=>validateDoorTests(freshDoorTests(['B','C']),{expectedTargets:['B']}),TypeError);
+});
+
+test('inactive columns cannot contain attempts or observations, including cross-column samples',()=>{
+  for(const mutate of [
+    value=>value.banks.A.door=1,
+    value=>value.banks.D.skipReason='Evidence must not be hidden.',
+    value=>value.banks.E.command.open={status:'sent',at},
+    value=>value.banks.B.snapshots.baseline.A=sample('A'),
+    value=>value.banks.C.samples=[{phase:'open',...sample('D')}],
+  ]){
+    const value=freshDoorTests(['B','C']);mutate(value);
+    assert.throws(()=>validateDoorTests(value),TypeError);assert.equal(hasDoorTestData(value),true);
+  }
+  const value=freshDoorTests(['B','C']);
+  value.banks.B.snapshots.baseline={B:sample('B'),C:sample('C')};
+  value.banks.B.samples=[{phase:'open',...sample('C',[9])}];
+  assert.doesNotThrow(()=>validateDoorTests(value));
+  assert.deepEqual(doorTestSummary(value).banks.B.changes.C,[9]);
+});
+
+test('legacy missing targets retain historical five-column evidence when the current layout differs',()=>{
+  const value=skipped();delete value.targets;
+  const before=JSON.stringify(value);
+  assert.deepEqual(getDoorTargets(value),banks);assert.equal(doorTestsComplete(value),true);
+  assert.equal(doorTestsComplete(value,['B','C']),false);
+  assert.throws(()=>validateDoorTests(value,{expectedTargets:['B','C']}),/match/);
+  const text=formatDoorTests(value,['B','C']);
+  assert.match(text,/Historical evidence is retained/);
+  for(const bank of banks)assert.ok(text.includes('BANK '+bank+':'));
+  assert.equal(JSON.stringify(value),before);
 });

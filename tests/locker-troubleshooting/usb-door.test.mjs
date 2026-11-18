@@ -34,18 +34,19 @@ class Element{
   addEventListener(type,callback){this.listeners.set(type,callback);}
 }
 
-async function setup({query,pulse,cancelPulse}={}){
+async function setup({query,pulse,cancelPulse,getBoards=()=>boards}={}){
   const clock=new Clock(),listeners=new Map(),saved=[],instances=[];
   const document={hidden:false,elements:new Map(),addEventListener(type,callback){listeners.set(type,callback);}};
   const root=new Element(document),calls={queries:[],pulses:[],cancel:0,close:0,reset:0,open:0,ports:0};
   const at=()=>new Date(clock.now).toISOString();
   const reading=(board,bits='0000000000000000')=>({board,bits,raw:`<${board}>Ex(BIN):${bits.slice(0,8)}:${bits.slice(8)}~`,at:at(),elapsedMs:0});
-  const evidence=(board='A',extra={})=>({open:{status:'sent',at:at()},lockOff:{status:'sent',at:at()},samples:[{...reading(board,'0000000000000001'),status:'responded'}],...extra});
+  const evidence=(board='A',extra={})=>({board,openCommand:'LA0#'+board,offCommand:'LMX#'+board,openSent:true,offSent:true,offConfirmed:false,
+    open:{status:'sent',at:at()},lockOff:{status:'sent',at:at()},samples:[{...reading(board,'0000000000000001'),status:'responded'}],...extra});
   class SerialTransport{
     constructor(port,options){this.port=port;this.options=options;this.connected=false;this.busy=false;this.activationBlocked=false;instances.push(this);}
     async open(){calls.open++;this.connected=true;this.options.onState({connected:true,busy:false});}
     async query(board){calls.queries.push(board);return query?query(board,calls.queries.length,reading):reading(board);}
-    async pulseDoor(board,door,options){calls.pulses.push({board,door,options});return pulse?pulse(board,door,evidence):evidence(board);}
+    async pulseDoor(board,door,options){calls.pulses.push({board,door,options});return pulse?pulse(board,door,evidence):evidence(board,{door,openCommand:'LA'+(door-1).toString(16).toUpperCase()+'#'+board});}
     async cancelDoorPulse(){calls.cancel++;return cancelPulse?.(evidence);}
     async close(){calls.close++;this.connected=false;this.options.onState({connected:false,busy:false});}
     async resetMaster(){calls.reset++;return{confirmed:false};}
@@ -54,7 +55,7 @@ async function setup({query,pulse,cancelPulse}={}){
     constructor(...args){super(...(args.length?args:[clock.now]));}
     static now(){return clock.now;}
   }
-  const context=vm.createContext({SerialTransport,document,root,options:{onSave:value=>saved.push(clone(value))},
+  const context=vm.createContext({SerialTransport,document,root,options:{getBoards,onSave:value=>saved.push(clone(value))},
     navigator:{serial:{async requestPort(){calls.ports++;return{};},addEventListener(){}}},
     window:{isSecureContext:true},structuredClone,Date:FakeDate,
     setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout,
@@ -151,4 +152,99 @@ test('closed-input capture reads each bank but never sends an opening pulse',asy
   assert.deepEqual(run.calls.queries,['B','A','C','D','E']);
   assert.deepEqual(samples.map(sample=>sample.board),['B','A','C','D','E']);
   assert.equal(run.calls.pulses.length,0);assert.equal(run.calls.reset,0);assert.equal(run.panel.busy,false);
+});
+
+for(const[capacity,targets,chosen]of [['32',['B','C'],'B'],['64',['A','B','C','D'],'D']]){
+  test(`${capacity}-bay USB checks, door attempts and closed snapshots use only the installed columns`,async()=>{
+    const run=await setup({getBoards:()=>targets}),samples=[],commands=[];
+    const select=run.document.elements.get('usb-monitor-board');
+    assert.ok(select.innerHTML.includes('value="all"'));
+    for(const bank of boards)assert.equal(select.innerHTML.includes(`value="${bank}"`),targets.includes(bank));
+
+    await run.panel.check(chosen);
+    const scan=run.panel.scan();await flush();await run.clock.advance(200*(targets.length+1));await scan;
+    assert.deepEqual(run.calls.queries,[chosen,...targets]);
+
+    const firstQuery=run.calls.queries.length;
+    const pending=run.panel.openDoorTest(chosen,16,{
+      onSample:(phase,result)=>samples.push({phase,result:clone(result)}),
+      onCommand:value=>commands.push(clone(value)),
+    });
+    await run.finish(pending);
+    assert.deepEqual(run.calls.queries.slice(firstQuery,firstQuery+targets.length+1),[chosen,...targets.filter(bank=>bank!==chosen),chosen]);
+    assert.deepEqual(run.calls.queries.slice(-(targets.length-1)),targets.filter(bank=>bank!==chosen));
+    assert.equal(samples.filter(sample=>sample.phase==='baseline').length,targets.length+1);
+    assert.ok(samples.some(sample=>sample.phase==='open'&&sample.result.board===chosen&&sample.result.bits==='0000000000000001'),'pulse-time input evidence is retained');
+    assert.ok(samples.every(sample=>targets.includes(sample.result.board)));
+    assert.equal(run.calls.pulses.length,1);assert.equal(run.calls.pulses[0].board,chosen);assert.equal(run.calls.pulses[0].door,16);
+    assert.equal(commands.length,1);assert.equal(commands[0].openCommand,'LAF#'+chosen);assert.equal(commands[0].offCommand,'LMX#'+chosen);
+    assert.equal(commands[0].offConfirmed,false);
+
+    const beforeClosed=run.calls.queries.length,closed=[];
+    await run.panel.readDoorTestInputs(chosen,{onSample:value=>closed.push(clone(value))});
+    assert.deepEqual(run.calls.queries.slice(beforeClosed),[chosen,...targets.filter(bank=>bank!==chosen)]);
+    assert.deepEqual(closed.map(value=>value.board),[chosen,...targets.filter(bank=>bank!==chosen)]);
+    assert.ok(run.calls.queries.every(bank=>targets.includes(bank)));
+    assert.equal(run.calls.pulses.length,1,'closed observations do not open another door');
+    assert.equal(run.panel.busy,false);
+  });
+
+  test(`${capacity}-bay scans and direct requests reject absent columns before any query or pulse`,async()=>{
+    const run=await setup({getBoards:()=>targets}),absent=boards.find(bank=>!targets.includes(bank));
+    for(const operation of [
+      ()=>run.panel.check(absent),()=>run.panel.scan([absent]),()=>run.panel.scan([...targets,absent]),
+      ()=>run.panel.openDoorTest(absent,1),()=>run.panel.readDoorTestInputs(absent),
+    ])await assert.rejects(operation(),error=>error.code==='LAYOUT');
+    assert.deepEqual(run.calls.queries,[]);assert.deepEqual(run.calls.pulses,[]);
+    assert.equal(run.calls.reset,0);assert.equal(run.calls.open,1);assert.equal(run.calls.ports,1);
+    assert.equal(run.panel.busy,false);
+  });
+
+  test(`${capacity}-bay input monitoring offers and queries only installed columns`,async()=>{
+    const run=await setup({getBoards:()=>targets}),select=run.document.elements.get('usb-monitor-board');
+    assert.equal(select.value,'all');
+    const monitoring=run.document.elements.get('usb-monitor').listeners.get('click')();await flush();
+    await run.clock.advance(500*(targets.length-1));
+    run.panel.stopMonitor();await run.clock.advance(500);await monitoring;
+    assert.deepEqual(run.calls.queries,targets);
+    assert.equal(run.calls.pulses.length,0);assert.equal(run.panel.monitoring,false);
+    for(const bank of boards)assert.equal(select.innerHTML.includes(`value="${bank}"`),targets.includes(bank));
+  });
+}
+
+test('changing the active layout during the sensor watch cancels remaining reads without another pulse',async()=>{
+  let targets=['A','B','C','D'];
+  const run=await setup({getBoards:()=>targets});
+  const pending=run.panel.openDoorTest('B',4),rejected=assert.rejects(pending,error=>error.code==='CANCELLED');
+  await flush();assert.equal(run.calls.pulses.length,1);assert.ok(run.calls.queries.length>=6);
+  const before=run.calls.queries.length;
+  targets=['B','C'];run.panel.refreshLayout();
+  await run.clock.advance(11000);await rejected;
+  assert.equal(run.calls.queries.length,before,'no further old-layout or cross-column reads run');
+  assert.equal(run.calls.pulses.length,1);assert.equal(run.panel.busy,false);
+  await run.clock.advance(60000);assert.equal(run.calls.pulses.length,1);
+});
+
+test('a stale A monitor selection refreshes to all installed B,C columns without querying A',async()=>{
+  let targets=[...boards];
+  const run=await setup({getBoards:()=>targets}),select=run.document.elements.get('usb-monitor-board');
+  select.value='A';targets=['B','C'];run.panel.refreshLayout();
+  assert.equal(select.value,'all');assert.ok(!select.innerHTML.includes('value="A"'));
+  const monitoring=run.document.elements.get('usb-monitor').listeners.get('click')();await flush();
+  await run.clock.advance(500);run.panel.stopMonitor();await run.clock.advance(500);await monitoring;
+  assert.deepEqual(run.calls.queries,['B','C']);assert.equal(run.calls.pulses.length,0);
+});
+
+test('an unconfirmed empty layout cannot open a port, query, reset or actuate hardware',async()=>{
+  const run=await setup({getBoards:()=>[]});
+  await run.panel.connect();
+  for(const operation of [
+    ()=>run.panel.scan(),()=>run.panel.scan(['C']),()=>run.panel.reset(),()=>run.panel.check('C'),
+    ()=>run.panel.openDoorTest('C',1),()=>run.panel.readDoorTestInputs('C'),
+  ])await assert.rejects(operation());
+  await run.document.elements.get('usb-monitor').listeners.get('click')();
+  assert.equal(run.calls.ports,0);assert.equal(run.calls.open,0);assert.equal(run.calls.reset,0);
+  assert.deepEqual(run.calls.queries,[]);assert.deepEqual(run.calls.pulses,[]);
+  for(const id of ['usb-connect','usb-scan','usb-monitor'])assert.equal(run.document.elements.get(id).disabled,true);
+  assert.equal(run.document.elements.get('usb-monitor-board').innerHTML,'<option value="all">All installed boards</option>');
 });
