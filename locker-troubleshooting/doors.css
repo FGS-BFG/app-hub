@@ -19,3 +19,11 @@
 @media(max-width:600px){.door-current{padding:15px}.door-bank-tabs{gap:5px}.door-bank span{font-size:9px}.door-answer .choices{grid-template-columns:1fr}.door-bank b{font-size:12px}}
 
 .photo-caption{font-size:12px;line-height:1.7;color:var(--muted);padding:12px 15px;background:#f4f7f3;border-radius:8px}.photo-caption[hidden]{display:none}
+.button-help{margin:20px 0;border:1px solid var(--line);border-radius:10px;background:#f6f9f5}
+.button-help>summary{padding:16px 18px;cursor:pointer;font-size:13px;font-weight:650;color:var(--teal)}
+.button-help-body{padding:0 18px 18px}.button-help ol{padding-left:20px;font-size:13px;line-height:1.8}.button-help li+li{margin-top:8px}
+.button-help .field{max-width:380px;margin:18px 0}.button-help figure{margin:18px 0}.button-help figcaption,.button-help-note{font-size:12px;line-height:1.7;color:var(--muted);max-width:460px}
+.button-closeup{position:relative;overflow:hidden;isolation:isolate;aspect-ratio:4/3;width:100%;max-width:380px;border:1px solid var(--line);border-radius:9px;background:#e9eeea}
+.button-closeup img{position:absolute;display:block;width:450%;height:auto;max-width:none;image-orientation:from-image}
+.button-closeup.flat img{left:-6%;top:-450%}.button-closeup.wired img{left:-18.5%;top:-446%}
+@media(max-width:600px){.button-help>summary{padding:14px}.button-help-body{padding:0 14px 14px}}

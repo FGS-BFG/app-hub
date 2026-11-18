@@ -141,6 +141,8 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     enterDoorStep(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('doors','Test fixture completed communication checks')",context);flush();},
     enterInitialCheck(capacity='80'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('initial','Test fixture completed connection check')",context);flush();},
     enterConnection(capacity='32'){context.fixtureCapacity=capacity;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('connect','Test fixture completed power cycle')",context);flush();},
+    enterSelfTest(capacity='80',setup='flat-input-sense'){context.fixtureCapacity=capacity;context.fixtureSetup=setup;vm.runInContext("s.details.lockerCapacity=fixtureCapacity;s.details.boardConfiguration=fixtureSetup;s.doorTests=freshDoorTests(boardsFor(s),masterFor(s));go('selftest','Test fixture requested physical self-test')",context);flush();},
+    timerCount(){return timers.size;},
     readyConnection(master){context.fixtureMaster=master;vm.runInContext("connection.snapshot=()=>({phase:'ready',masterBoard:fixtureMaster,connected:true,verifiedAt:1});render()",context);flush();},
     releaseDoor(){releaseDoor?.();},
     change(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI input exists: '+id);element.value=value;element.dispatch('change');flush();},
@@ -564,7 +566,10 @@ test('32-bay connection proof, reset, sidebar and door master use B while 64 and
     assert.equal(app.document.querySelector('#next').disabled,true);app.click('next');
     assert.equal(app.calls.usbReset,0);assert.equal(app.state().step,'connect');
     assert.doesNotMatch(app.document.querySelector('#step').innerHTML,/We are happy with the connection/);
-    app.readyConnection(master);app.click('next');await app.settle();
+    app.readyConnection(master);app.click('next');
+    assert.match(app.document.querySelector('#step').innerHTML,new RegExp('Resetting master '+master));
+    if(master==='B')assert.doesNotMatch(app.document.querySelector('#step').innerHTML,/master C/);
+    await app.settle();
     assert.equal(app.state().step,'reset');assert.deepEqual(app.resetTargets,[master]);
     assert.match(app.state().log.at(-1).label,new RegExp('RST#'+master));
     app.click('next');await app.settle();assert.deepEqual(app.scanTargets,[targets]);
@@ -583,4 +588,32 @@ test('32-bay setup identifies A and B and captions the C-master reference photog
   assert.match(app.document.querySelector('#reference-caption').textContent,/C-master reference.*master B and slave A/);
   app.click('zoom-photo');assert.equal(app.document.querySelector('#photo-dialog').open,true);
   assert.match(app.document.querySelector('#photo-caption').textContent,/master B and slave A/);
+});
+
+test('self-test button help uses the recorded reference version and the configured master',()=>{
+  for(const [capacity,master]of[['32','B'],['64','C'],['80','C']])for(const setup of['flat-input-sense','individual-wires']){
+    const app=boot();app.enterSelfTest(capacity,setup);
+    assert.match(app.document.querySelector('#step').innerHTML,/Need help finding the red button\?/);
+    assert.equal(app.document.querySelector('#button-help').getAttribute('open'),null);
+    const image=app.document.querySelector('#button-help-image');
+    assert.equal(image.getAttribute('src'),setup==='individual-wires'?'assets/master-wired-reference.jpg':'assets/master.png');
+    assert.match(app.document.querySelector('#step').innerHTML,new RegExp('Use the button on master '+master));
+    assert.match(app.document.querySelector('#step').innerHTML,new RegExp('We will reset master '+master+' and try'));
+    assert.equal(app.timerCount(),0);noAutomaticIO(app);
+  }
+});
+
+test('opening button help, switching references and enlarging the photo do not start a timer or change test evidence',()=>{
+  const app=boot();app.enterSelfTest('32','flat-input-sense');const before=app.state();
+  const help=app.document.querySelector('#button-help');help.open=true;help.dispatch('toggle');
+  app.change('button-help-setup','individual-wires');
+  assert.equal(app.document.querySelector('#button-help').getAttribute('open'),'');
+  assert.equal(app.document.querySelector('#button-help-image').getAttribute('src'),'assets/master-wired-reference.jpg');
+  app.click('button-help-preview');
+  assert.equal(app.document.querySelector('#photo-dialog').open,true);
+  assert.equal(app.document.querySelector('#full-photo').src,'assets/master-wired-labelled.png');
+  assert.match(app.document.querySelector('#photo-caption').textContent,/master B and slave A/);
+  app.click('close-photo');app.change('button-help-setup','flat-input-sense');
+  assert.equal(app.document.querySelector('#button-help-image').getAttribute('src'),'assets/master.png');
+  assert.deepEqual(app.state(),before);assert.equal(app.timerCount(),0);noAutomaticIO(app);
 });

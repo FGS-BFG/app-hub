@@ -52,6 +52,8 @@ This directory owns the GitHub Pages copy. The earlier private Sites version is 
 
 ## Guided door checks
 
+The physical self-test screen includes **Need help finding the red button?**, with close-ups for both flat Input Sense ribbons and individual sensor wires. It defaults to the recorded setup and lets the operator switch the reference or enlarge the full-board photo. These help controls do not start the timer, send commands, change the recorded setup or choose an answer. The instructions identify the configured master, including B for 32 bays.
+
 Before the final report, the operator tests one selected door on each fitted column. Record whether the original connections are restored or describe the changed connections fitted. Choose a door, confirm it is closed and clear, then select **Open door**. Opening requires that explicit click. Entering the step, Back, reconnecting, refresh and report recovery never activate outputs. Absent columns are not queried or activated; direct USB reads, mixed scans and door commands to inactive addresses are rejected before I/O.
 
 Slave cable comparisons exclude the configured master. The 80-bay layout permits A with B and D with E; the 64-bay layout permits A with B; the 32-bay layout has no adjacent slave pair. A failed column without an adjacent working slave is recorded as unresolved and is not compared by swapping the master connection. Older targetless reports retain their historical A–E meaning, and frozen retries keep their original text. Actual older readings outside the current layout remain identified as historical evidence. The downloadable Word procedure describes the original 80-bay layout.
