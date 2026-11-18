@@ -1,4 +1,4 @@
-import {hasReportData, payloadForDrive} from './report-record.js?v=20261118-identify';
+import {hasReportData, payloadForDrive} from './report-record.js?v=20261118-doors';
 import {buildReportPayload, validateSaveResult} from './drive-reports.js';
 
 export const STORAGE_PREFIX = 'fgs-mci-guided-usb-v4';

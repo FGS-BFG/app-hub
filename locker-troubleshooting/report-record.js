@@ -1,4 +1,5 @@
-import {outcome, report} from './flow.js?v=20261118-identify';
+import {outcome, report} from './flow.js?v=20261118-doors';
+import {validateDoorTests,hasDoorTestData} from './door-test.js?v=20261118-doors';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fields = ['id', 'savedAt', 'title', 'location', 'technician', 'reportText'];
@@ -73,6 +74,7 @@ function validateSession(session) {
       invalid('step records must contain a timestamp and label.');
     }
   }
+  validateDoorTests(session.doorTests);
 }
 
 function clone(value) {
@@ -121,6 +123,7 @@ export function payloadForDrive(record) {
     invalid('report text or metadata exceeds the supported length.');
   }
   if (!isObject(record.session)) invalid('saved session must be an object.');
+  validateDoorTests(record.session.doorTests);
   // Retries send exactly the saved text. Never regenerate an old report using a
   // newer outcome/formatter, which may legitimately use different wording.
   return Object.fromEntries(fields.map(key => [key, record[key]]));
@@ -134,6 +137,7 @@ function hasEntries(value) {
 
 export function hasReportData(session) {
   if (!isObject(session)) return false;
+  if (hasDoorTestData(session.doorTests)) return true;
   if (['location', 'technician', 'notes', 'title', 'boardConfiguration', 'masterBoardLabel', 'slaveBoardLabels', 'configurationNotes'].some(key => hasText(session.details?.[key]))) return true;
   if (['connection', 'selftest', 'affected', 'neighbor', 'cable', 'title'].some(key => hasText(session[key]))) return true;
   if (session.connectionIssue === true || session.acknowledged === true) return true;

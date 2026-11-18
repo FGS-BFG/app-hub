@@ -1,0 +1,19 @@
+.door-setup,.door-skip{margin:20px 0;padding:16px;border:1px solid var(--line);border-radius:10px;background:#f8faf7}
+.door-setup summary,.door-skip summary{cursor:pointer;font-size:13px;font-weight:650}
+.door-setup p,.door-current p,.door-result p{font-size:13px;line-height:1.7}
+.door-bank-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:24px 0}
+.door-bank{padding:12px 5px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);text-align:center;min-width:0}
+.door-bank.selected{border-color:var(--teal);background:var(--pale);box-shadow:0 0 0 1px var(--teal)}
+.door-bank b,.door-bank span{display:block}.door-bank b{font-size:14px}.door-bank span{font-size:10px;line-height:1.5;margin-top:6px;color:var(--muted)}
+.door-current{border:1px solid var(--line);border-radius:12px;padding:20px;margin:20px 0;background:#fff}
+.door-current h2,.door-result h2{margin:0 0 18px;font-size:20px}
+.door-ready{display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.7;margin:20px 0}
+.door-ready input{width:18px;height:18px;flex:none;margin-top:3px;accent-color:var(--teal)}
+.door-current .primary,.door-current .secondary{margin:8px 8px 8px 0}
+.door-number-help,.door-help{font-size:11px!important;line-height:1.7;color:var(--muted)}
+.door-answer{padding:0;border:0;margin:24px 0;min-width:0}.door-answer legend{font-size:13px;font-weight:650;margin-bottom:12px}
+.door-answer .choices{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.door-answer .choice{font-size:12px;text-align:center}
+.door-evidence,.door-result{padding:18px;border:1px solid var(--line);border-radius:10px;background:#f4f7f3;margin:22px 0}
+.door-evidence strong{font-size:13px}.door-evidence ul,.door-result ul{padding-left:20px;font-size:12px;line-height:1.9}.door-evidence small{display:block;font-size:11px;line-height:1.7;color:var(--muted)}
+.door-current button:disabled,.door-setup button:disabled,.door-current select:disabled{cursor:not-allowed;opacity:.5}
+@media(max-width:600px){.door-current{padding:15px}.door-bank-tabs{gap:5px}.door-bank span{font-size:9px}.door-answer .choices{grid-template-columns:1fr}.door-bank b{font-size:12px}}

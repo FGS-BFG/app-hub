@@ -1,6 +1,13 @@
-// Read-only locker diagnostics. Only ISB#A–E and RST#C may reach the wire.
+// Locker diagnostics plus one explicitly requested, bounded door pulse.
+// Door activation is constructed separately; diagnostic commands stay restricted.
 // This protocol has no transaction IDs: draining reduces, but cannot eliminate,
 // the risk of a very late reply being mistaken for a later same-board request.
+export const DEFAULT_DOOR_PULSE_MS = 500;
+export const MIN_DOOR_PULSE_MS = 100;
+export const MAX_DOOR_PULSE_MS = 2000;
+// Quiet-mode commands need no ACK. Briefly collect a controller rejection instead
+// of treating the absence of an optional response as failure or physical proof.
+const DOOR_COMMAND_SETTLE_MS = 60;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
 const delayOption = (value, fallback) => Number.isFinite(value) && value >= 0 ? value : fallback;
@@ -46,6 +53,8 @@ export class SerialTransport {
     this._lastDataAt = 0;
     this._notBefore = 0;
     this._lastError = null;
+    this.activationBlocked = false;
+    this.activationBlockReason = '';
     this._onDisconnect = () => this._fail(new SerialError('DISCONNECTED', 'The USB serial device disconnected.'));
   }
 
@@ -56,6 +65,7 @@ export class SerialTransport {
   _state(error) {
     try {
       this.onState?.({connected: this.connected, busy: this.busy,
+        activationBlocked: this.activationBlocked, activationBlockReason: this.activationBlockReason,
         ...(error ? {error: {code: error.code, message: error.message}} : {})});
     } catch {}
   }
@@ -97,7 +107,33 @@ export class SerialTransport {
   }
 
   async close() {
-    await this._shutdown(new SerialError('DISCONNECTED', 'The serial connection was closed.'));
+    // Keep the writer available until an active pulse has attempted its scoped OFF.
+    await this.cancelDoorPulse();
+    const error = new SerialError('DISCONNECTED', 'The serial connection was closed.');
+    if (this.activationBlocked) await this._settlePulseShutdown(error);
+    else await this._shutdown(error);
+  }
+
+  cancelDoorPulse() {
+    const active = this._active;
+    if (active?.kind !== 'pulse') return Promise.resolve(null);
+    active.cancelled = true;
+    active.stop.resolve();
+    return active.finished.promise;
+  }
+
+  async _settlePulseShutdown(error) {
+    // An underlying USB write can remain pending even after its deadline. In that
+    // case WritableStream.abort() can also wait forever. Leave _closing latched,
+    // retain the activation block, and report failure without hanging the guide.
+    let timer;
+    try {
+      const released = await Promise.race([
+        this._shutdown(error).then(() => true),
+        new Promise(resolve => { timer = setTimeout(() => resolve(false), 250); }),
+      ]);
+      if (!released) this._event('warning', {code: 'PORT', message: 'The USB stream has not released. Output state is unknown; reconnect the device before using a fresh connection.'});
+    } finally { clearTimeout(timer); }
   }
 
   async _shutdown(error) {
@@ -135,6 +171,15 @@ export class SerialTransport {
     if (this._closing || (!this._opened && !this._opening)) return;
     this._lastError = error;
     this._event('error', {code: error.code, message: error.message});
+    // A failed read/disconnect must not release the writer ahead of pulse cleanup.
+    // A disconnected device may reject OFF; the attempt and uncertainty are recorded.
+    if (this._active?.kind === 'pulse') {
+      this.connected = false;
+      this._active.failure = error;
+      this._active.abort.reject(error);
+      this._state(error);
+      return;
+    }
     this._shutdown(error).catch(() => {});
   }
 
@@ -164,6 +209,10 @@ export class SerialTransport {
     if (active?.accepting) {
       active.sawData = true;
       active.raw = (active.raw + text).slice(-65536);
+      if (active.kind === 'pulse' && active.sample?.accepting) {
+        active.sample.sawData = true;
+        active.sample.raw = (active.sample.raw + text).slice(-1024);
+      }
     }
     this._buffer += text;
     if (this._buffer.length > 8192) {
@@ -188,6 +237,8 @@ export class SerialTransport {
       const board = reply[1].toUpperCase();
       if (active.kind === 'query' && board === active.board) {
         active.response.resolve({board, bits: reply[2] + reply[3], raw: reply[0], elapsedMs: Date.now() - active.started, at: now()});
+      } else if (active.kind === 'pulse' && active.sample?.accepting && board === active.board) {
+        active.sample.response.resolve({board, status: 'responded', bits: reply[2] + reply[3], raw: reply[0], elapsedMs: Date.now() - active.sample.started, at: now()});
       } else if (active.kind === 'query') {
         this._event('warning', {code: 'PROTOCOL', raw, message: `Ignored a reply from board ${board} while waiting for ${active.board}.`});
       }
@@ -196,9 +247,14 @@ export class SerialTransport {
       const board = addressed[1].toUpperCase();
       if (board !== active.board) continue;
       if (/\bSYSTEM_Reset\s+in\s+5\s+seconds/i.test(addressed[2])) active.acknowledged = true;
-      if (/command\s*error|unknown[^\r\n]*command|\bbusy\b|^\s*error\b/i.test(addressed[2])) {
+      if (/command\s*error|unknown[^\r\n]*command|\bbusy\b|^\s*error\b/i.test(addressed[2]) ||
+          (active.kind === 'pulse' && /parameter\s*error|lock events deactivated/i.test(addressed[2]))) {
         const error = new SerialError('CONTROLLER', `Board ${board} returned an error: ${addressed[2].trim()}`);
         error.raw = raw;
+        if (active.kind === 'pulse') {
+          if (active.phase === 'off') active.offError = error;
+          else active.failure = error;
+        }
         active.response.reject(error);
         active.abort.reject(error);
         return;
@@ -209,10 +265,14 @@ export class SerialTransport {
 
   _begin(command, kind, board) {
     if (!/^(ISB#[A-E]|RST#C)$/.test(command)) throw new SerialError('INVALID_COMMAND', 'Only ISB#A–E and RST#C are permitted.');
+    return this._reserve(command, kind, board);
+  }
+
+  _reserve(command, kind, board, extra = {}) {
     if (!this.connected || this._closing) throw new SerialError('DISCONNECTED', 'Connect the USB serial port before sending a command.');
     if (this.busy) throw new SerialError('BUSY', 'Wait for the current serial transaction to finish.');
     const active = {command, kind, board, raw: '', sawData: false, accepting: false,
-      acknowledged: false, abort: deferred(), response: deferred(), started: 0};
+      acknowledged: false, abort: deferred(), response: deferred(), started: 0, ...extra};
     this._active = active;
     this.busy = true;
     this._state();
@@ -262,6 +322,173 @@ export class SerialTransport {
     this._active = null;
     this.busy = false;
     this._state();
+  }
+
+  _pulseCheck(active) {
+    if (active.failure) throw active.failure;
+    if (active.cancelled) throw new SerialError('CANCELLED', 'The door test was stopped; scoped lock-off was attempted.');
+  }
+
+  async _writePulseCommand(active, command, cleanup = false, notAfter = Infinity) {
+    // 304 firmware: LA0–LAF set one output and arm the configured firmware timer.
+    // LMX clears both output latches on ONLY the addressed board (no mandatory ACK).
+    // Source: mci_304_app_device.c OPXba_Command and USB/SERIAL Lxx dispatch.
+    if (command !== active.openCommand && command !== active.offCommand &&
+        !(active.phase === 'sample' && command === 'ISB#' + active.board)) {
+      throw new SerialError('INVALID_COMMAND', 'Only this door test and its scoped lock-off are permitted.');
+    }
+    const bytes = this._encoder.encode(command + '\r');
+    const deadline = Math.min(Date.now() + Math.max(250, this.timeout), notAfter);
+    this._event('tx', {command, raw: command + '\r'});
+    try {
+      for (let i = 0; i < bytes.length; i++) {
+        if (!cleanup && active.failure) throw active.failure;
+        if (Date.now() >= deadline) throw new SerialError('WRITE', 'The USB command write did not finish before its deadline.');
+        if (!this._opened || !this._writer) throw new SerialError('DISCONNECTED', 'The USB serial connection closed while writing.');
+        let timer;
+        try {
+          await Promise.race([
+            this._writer.write(bytes.subarray(i, i + 1)),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new SerialError('WRITE', 'The USB command write did not finish before its deadline.')), Math.max(0, deadline - Date.now())); }),
+          ]);
+        } finally { clearTimeout(timer); }
+        // Do not truncate a frame merely because the operator cancelled midway.
+        // Complete it when possible, then send OFF without the remaining dwell.
+        if (this.charDelay && i < bytes.length - 1) await sleep(Math.min(this.charDelay, Math.max(0, deadline - Date.now())));
+      }
+    } catch (cause) {
+      if (cause instanceof SerialError) throw cause;
+      throw new SerialError('WRITE', 'The door command could not be written to the USB serial port.', cause);
+    }
+  }
+
+  async _sampleDuringPulse(active, evidence) {
+    const sample = {response: deferred(), raw: '', sawData: false, accepting: true, started: Date.now()};
+    active.sample = sample;
+    active.phase = 'sample';
+    this._buffer = '';
+    const sampleDeadline = Math.min(active.pulseDeadline, sample.started + this.timeout);
+    let timer;
+    try {
+      this._pulseCheck(active);
+      await this._writePulseCommand(active, 'ISB#' + active.board, false, active.pulseDeadline);
+      this._pulseCheck(active);
+      const response = await Promise.race([
+        sample.response.promise,
+        new Promise(resolve => { timer = setTimeout(() => resolve(null), Math.max(0, sampleDeadline - Date.now())); }),
+        active.stop.promise.then(() => { this._pulseCheck(active); }),
+        active.abort.promise,
+        this._life.promise,
+      ]);
+      this._pulseCheck(active);
+      if (response) evidence.samples.push(response);
+      else evidence.samples.push({board: active.board, status: sample.sawData ? 'error' : 'no-response',
+        code: sample.sawData ? 'PROTOCOL' : 'TIMEOUT',
+        error: sample.sawData ? 'No valid addressed input-status reply arrived during the pulse.' : 'No input-status reply arrived before the pulse deadline.',
+        raw: sample.raw, at: now(), elapsedMs: Date.now() - sample.started});
+    } catch (error) {
+      evidence.samples.push({board: active.board, status: 'error', code: error.code || 'WRITE',
+        error: error.message, raw: sample.raw, at: now(), elapsedMs: Date.now() - sample.started});
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      sample.accepting = false;
+      active.phase = 'open';
+    }
+  }
+
+  async pulseDoor(board, door, options = {}) {
+    if (typeof board !== 'string' || !/^[A-E]$/.test(board) || !Number.isInteger(door) || door < 1 || door > 16) {
+      throw new SerialError('INVALID_COMMAND', 'Choose board A–E and a door number from 1 to 16.');
+    }
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'durationMs')) {
+      throw new SerialError('INVALID_COMMAND', 'The door test accepts only its pulse duration.');
+    }
+    const durationMs = options.durationMs === undefined ? DEFAULT_DOOR_PULSE_MS : options.durationMs;
+    if (!Number.isInteger(durationMs) || durationMs < MIN_DOOR_PULSE_MS || durationMs > MAX_DOOR_PULSE_MS) {
+      throw new SerialError('INVALID_COMMAND', `The pulse duration must be ${MIN_DOOR_PULSE_MS}–${MAX_DOOR_PULSE_MS} milliseconds.`);
+    }
+    if (this.activationBlocked) throw new SerialError('ACTIVATION_BLOCKED', this.activationBlockReason);
+    const openCommand = 'LA' + (door - 1).toString(16).toUpperCase() + '#' + board;
+    const offCommand = 'LMX#' + board;
+    const active = this._reserve(openCommand, 'pulse', board, {
+      openCommand, offCommand, stop: deferred(), finished: deferred(), cancelled: false,
+      phase: 'preclear', failure: null, offError: null,
+    });
+    const evidence = {board, door, openCommand, offCommand, durationMs, preclearAttempted: false, preclearSent: false,
+      openAttempted: false, openSent: false, offAttempted: false, offSent: false,
+      offConfirmed: false, cancelled: false, at: now(), raw: '', samples: []};
+    const snapshot = () => ({...evidence, samples: evidence.samples.map(sample => ({...sample}))});
+    let error;
+    try {
+      await this._prepare(active);
+      this._pulseCheck(active);
+      // Legacy LA adds to existing latch bits. Clear this board before opening.
+      evidence.preclearAttempted = true;
+      await this._writePulseCommand(active, offCommand);
+      evidence.preclearSent = true;
+      evidence.preclearAt = now();
+      await Promise.race([sleep(DOOR_COMMAND_SETTLE_MS), active.stop.promise, active.abort.promise, this._life.promise]);
+      this._pulseCheck(active);
+      active.phase = 'open';
+      evidence.openAttempted = true; // A rejected write can still have reached hardware.
+      await this._writePulseCommand(active, openCommand);
+      evidence.openSent = true;
+      evidence.openAt = now();
+      active.pulseDeadline = Date.now() + durationMs;
+      this._pulseCheck(active);
+      // Query only this board while ON. A missing reply never extends the dwell.
+      await this._sampleDuringPulse(active, evidence);
+      await Promise.race([sleep(Math.max(0, active.pulseDeadline - Date.now())), active.stop.promise, active.abort.promise, this._life.promise]);
+      this._pulseCheck(active);
+    } catch (cause) {
+      error = cause instanceof SerialError ? cause : new SerialError('WRITE', 'The door test could not finish.', cause);
+      if (active.phase === 'preclear' && evidence.preclearAttempted && error.code !== 'CANCELLED') {
+        error = new SerialError('LOCK_OFF', 'The initial scoped lock-off failed. No door-open command was sent; recover the controller and use a fresh connection before another door test.', error);
+        this.activationBlocked = true;
+        this.activationBlockReason = error.message;
+      }
+    } finally {
+      if (evidence.openAttempted) {
+        active.phase = 'off';
+        evidence.offAttempted = true;
+        try {
+          // Attempt even after an ambiguous ON write, cancellation or input failure.
+          // The controller shifts its last command bytes; do not terminate a partial
+          // ON prefix separately, which could execute it as an unaddressed command.
+          await this._writePulseCommand(active, offCommand, true);
+          evidence.offSent = true;
+          evidence.offAt = now();
+          await sleep(DOOR_COMMAND_SETTLE_MS);
+          if (active.offError) throw active.offError;
+        } catch (cause) {
+          const offError = new SerialError('LOCK_OFF', 'Scoped lock-off did not complete successfully. Output state is unknown; recover the controller and use a fresh connection before another door test.', cause);
+          if (error) offError.openError = {code: error.code, message: error.message};
+          error = offError;
+          this.activationBlocked = true;
+          this.activationBlockReason = offError.message;
+        }
+      }
+      evidence.cancelled = active.cancelled;
+      evidence.raw = active.raw;
+      evidence.at = now();
+      if (error?.code === 'DISCONNECTED' && evidence.openAttempted) {
+        this.activationBlocked = true;
+        this.activationBlockReason = 'The connection failed during a door test. Recover the controller and use a fresh connection before another door test.';
+      }
+      if (error) {
+        error.evidence = snapshot();
+        this._event('error', {code: error.code, command: active.command, raw: active.raw, message: error.message, evidence: snapshot()});
+      }
+      // Write/transport failures invalidate the connection after OFF had its chance.
+      if (error && (['WRITE', 'LOCK_OFF', 'DISCONNECTED'].includes(error.code) || this._lastError)) {
+        await this._settlePulseShutdown(error);
+      }
+      this._finish(active);
+      active.finished.resolve(snapshot());
+    }
+    if (error) throw error;
+    return snapshot();
   }
 
   async query(board) {

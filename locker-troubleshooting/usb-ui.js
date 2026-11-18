@@ -1,4 +1,4 @@
-import {SerialTransport} from './serial.js';
+import {SerialTransport} from './serial.js?v=20261118-doors';
 
 const BOARDS=['A','B','C','D','E'];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -6,7 +6,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const stamp=()=>new Date().toISOString();
 export function changedInputs(previous,bits){return typeof previous==='string'&&typeof bits==='string'&&/^[01]{16}$/.test(previous)&&/^[01]{16}$/.test(bits)?Array.from({length:16},(_,i)=>i+1).filter(n=>previous[16-n]!==bits[16-n]):[];}
 export function mountUsbPanel(root,{saved={},onSave=()=>{},onConnection=()=>{},onBusy=()=>{},onScanRequested=null}={}){
- let transport=null,connecting=false,disconnecting=false,disconnectTask=null,operation=false,monitoring=false,monitorToken=0,token=0,intentionalClose=false;
+ let transport=null,connecting=false,disconnecting=false,disconnectTask=null,operation=false,monitoring=false,monitorToken=0,token=0,intentionalClose=false,doorStop=false;
  let data={boards:{},events:[],observations:[],checks:[],...saved};
  for(const key of ['events','observations','checks'])if(!Array.isArray(data[key]))data[key]=[];
  if(!data.boards||typeof data.boards!=='object')data.boards={};
@@ -28,7 +28,7 @@ export function mountUsbPanel(root,{saved={},onSave=()=>{},onConnection=()=>{},o
   $('#usb-badge').textContent=connecting?'Connecting…':monitoring?'Watching inputs':connected?'USB port open':'Disconnected';
   $('#usb-badge').classList.toggle('connected',connected);
   $('#usb-connect').disabled=!controlsEnabled||!supported||busy||connected;
-  $('#usb-disconnect').disabled=!controlsEnabled||!connected||connecting||disconnecting;
+  $('#usb-disconnect').disabled=!controlsEnabled||!connected||connecting||disconnecting||operation;
   $('#usb-scan').disabled=!controlsEnabled||!connected||busy||monitoring;
   $('#usb-monitor').disabled=!controlsEnabled||!connected||(!monitoring&&busy);
   $('#usb-monitor').textContent=monitoring?'Stop watching':'Watch sensor inputs';$('#usb-monitor-board').disabled=!controlsEnabled||busy||monitoring;
@@ -90,6 +90,46 @@ export function mountUsbPanel(root,{saved={},onSave=()=>{},onConnection=()=>{},o
   catch(e){lastError=e.message;throw e;}
   finally{operation=false;onBusy(false);paint();}
  }
+ function stopDoorTest(){doorStop=true;transport?.cancelDoorPulse?.().catch(error=>showError(error));}
+ function beginDoorOperation(board){
+  if(!BOARDS.includes(board))throw Error('Choose a column from A to E.');
+  if(connecting||disconnecting||operation||monitoring||transport?.busy)throw Error('Wait for the current USB check to finish.');
+  if(!transport?.connected)throw Error('Connect the locker USB port first.');
+  operation=true;doorStop=false;lastError='';onBusy(true);paint();return ++token;
+ }
+ async function openDoorTest(board,door,{shouldContinue=()=>true,onPhase=()=>{},onSample=()=>{},onCommand=()=>{}}={}){
+  if(!Number.isInteger(door)||door<1||door>16)throw Error('Choose a door from 1 to 16.');
+  if(transport?.activationBlocked)throw Error(transport.activationBlockReason||'Lock-off transmission was not confirmed. Stop opening doors and record the incomplete tests.');
+  const mine=beginDoorOperation(board),canContinue=()=>mine===token&&!doorStop&&!document.hidden&&shouldContinue();
+  const requireContinue=()=>{if(!canContinue())throw Object.assign(Error('Door check interrupted. No opening will be retried automatically.'),{code:'CANCELLED'});};
+  const read=async(phase,value)=>{requireContinue();const result=await check(value);onSample(phase,result);return result;};
+  try{
+   onPhase('Recording the starting sensor inputs…');
+   const first=await read('baseline',board);
+   if(first.status!=='responded')throw Object.assign(Error('The selected column did not provide a valid starting reading. No opening command was sent.'),{code:'BASELINE'});
+   for(const value of BOARDS.filter(value=>value!==board)){const result=await read('baseline',value);if(value==='C'&&result.status!=='responded')throw Object.assign(Error('Master C did not provide a valid starting reading. No opening command was sent.'),{code:'BASELINE'});}
+   const latest=await read('baseline',board);
+   if(latest.status!=='responded')throw Object.assign(Error('The selected column stopped replying before opening. No opening command was sent.'),{code:'BASELINE'});
+   requireContinue();onPhase(`Opening door ${door} on ${board}…`);
+   let evidence;
+   const recordPulse=value=>{for(const sample of value.samples||[])onSample('open',sample);onCommand(value);};
+   try{evidence=await transport.pulseDoor(board,door,{durationMs:500});recordPulse(evidence);}
+   catch(error){if(error.evidence)recordPulse({...error.evidence,code:error.code||'OUTPUT',error:error.message});throw error;}
+   if(evidence.cancelled)throw Object.assign(Error('The opening check was stopped. Record the physical result before continuing.'),{code:'CANCELLED'});
+   requireContinue();onPhase('Keep the selected door open. Watching its column for 10 seconds…');
+   const deadline=Date.now()+10000;
+   do{const result=await read('open',board);if(result.status!=='responded')break;await delay(150);}while(Date.now()<deadline&&canContinue());
+   requireContinue();onPhase('Checking the other columns for sensor changes…');
+   for(const value of BOARDS.filter(value=>value!==board))await read('open',value);
+   observe(`Column ${board}, door ${door}: opening and lock-off commands transmitted. Operator confirmation and raw sensor evidence are separate.`);
+  }catch(error){lastError=error.message;observe(`Column ${board}, door ${door}: ${error.message}`);throw error;}
+  finally{operation=false;onBusy(false);paint();}
+ }
+ async function readDoorTestInputs(board,{shouldContinue=()=>true,onSample=()=>{}}={}){
+  const mine=beginDoorOperation(board);
+  try{for(const value of [board,...BOARDS.filter(value=>value!==board)]){if(mine!==token||doorStop||document.hidden||!shouldContinue())throw Error('Closed-input check interrupted.');onSample(await check(value));}}
+  finally{operation=false;onBusy(false);paint();}
+ }
  async function toggleMonitor(){
   if(monitoring){stopMonitor();message='Input monitoring stopped.';paint();return;}
   if(connecting||disconnecting||operation||transport?.busy||!transport?.connected)return;
@@ -104,7 +144,8 @@ export function mountUsbPanel(root,{saved={},onSave=()=>{},onConnection=()=>{},o
  $('#usb-mark').addEventListener('click',()=>observe('Operator marker — compare subsequent sensor readings with the physical locker action.'));
  function showError(e){lastError=e.message;paint();}
  navigator.serial?.addEventListener('disconnect',e=>{if((e.port||e.target)===transport?.port)disconnect(false).catch(showError);});
- document.addEventListener('visibilitychange',()=>{if(document.hidden)stopMonitor();});
+ document.addEventListener('visibilitychange',()=>{if(document.hidden){stopMonitor();stopDoorTest();}});
+ globalThis.addEventListener?.('pagehide',stopDoorTest);
  persist();paint();
- return {supported,get connected(){return!!transport?.connected;},get busy(){return connecting||disconnecting||operation||monitoring||!!transport?.busy;},get monitoring(){return monitoring;},connect,disconnect,check,scan,reset,stopMonitor,showError,setControlsEnabled(value){controlsEnabled=!!value;paint();},snapshot:()=>structuredClone(data),clear(){data={boards:{},lastBits:{},connected:!!transport?.connected,events:[],observations:[],checks:[]};persist();paint();}};
+ return {supported,get connected(){return!!transport?.connected;},get busy(){return connecting||disconnecting||operation||monitoring||!!transport?.busy;},get activationBlocked(){return!!transport?.activationBlocked;},get activationBlockReason(){return transport?.activationBlockReason||'';},get monitoring(){return monitoring;},connect,disconnect,check:async board=>{if(operation||monitoring||connecting||disconnecting)throw Error('Wait for the current USB check to finish.');return check(board);},scan,reset,openDoorTest,readDoorTestInputs,stopDoorTest,stopMonitor,showError,setControlsEnabled(value){controlsEnabled=!!value;paint();},snapshot:()=>structuredClone(data),clear(){data={boards:{},lastBits:{},connected:!!transport?.connected,events:[],observations:[],checks:[]};persist();paint();}};
 }

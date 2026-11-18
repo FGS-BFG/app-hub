@@ -6,6 +6,8 @@ import * as flow from '../../locker-troubleshooting/flow.js';
 import * as records from '../../locker-troubleshooting/report-record.js';
 import * as driveHelpers from '../../locker-troubleshooting/drive-reports.js';
 import * as storageHelpers from '../../locker-troubleshooting/test-storage.js';
+import * as doorTests from '../../locker-troubleshooting/door-test.js';
+import {createDoorGuide} from '../../locker-troubleshooting/door-ui.js';
 
 const appUrl=new URL('../../locker-troubleshooting/app.js',import.meta.url);
 const html=fs.readFileSync(new URL('../../locker-troubleshooting/index.html',import.meta.url),'utf8');
@@ -48,6 +50,8 @@ class FakeElement{
   showModal(){this.open=true;}
   close(){this.open=false;}
   closest(selector){return this.document.matches(this,selector)?this:null;}
+  querySelectorAll(selector){return this.document.querySelectorAll(selector).filter(element=>{for(let owner=element.owner;owner;owner=owner.owner)if(owner===this)return true;return false;});}
+  querySelector(selector){return this.querySelectorAll(selector)[0]??null;}
 }
 
 class FakeDocument{
@@ -73,11 +77,11 @@ class FakeDocument{
   createElement(tag){return new FakeElement(this,tag);}
 }
 
-function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unexpected automatic Drive save.'}={}){
+function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unexpected automatic Drive save.',holdDoorOpen=false,doorFailure='',doorPreflightFailure='',doorOffFailure=false}={}){
   const document=new FakeDocument(html),microtasks=[],timers=new Map(),windowListeners=new Map();
-  const calls={uuid:0,usbCheck:0,usbScan:0,usbReset:0,usbConnect:0,guidedStart:0,driveSave:0,library:0,reloads:0};
-  const drivePayloads=[];
-  let timerId=0;
+  const calls={uuid:0,usbCheck:0,usbScan:0,usbReset:0,usbConnect:0,doorOpen:0,doorRead:0,guidedStart:0,driveSave:0,library:0,reloads:0};
+  const drivePayloads=[],doorTargets=[];
+  let timerId=0,releaseDoor;
   const usbData={boards:{},lastBits:{},events:[],checks:[],observations:[],connected:usbConnected};
   const window={
     addEventListener(type,listener){if(!windowListeners.has(type))windowListeners.set(type,[]);windowListeners.get(type).push(listener);},
@@ -101,15 +105,28 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
       snapshot:()=>clone(usbData),setControlsEnabled(){},stopMonitor(){},clear(){},showError(){},async disconnect(){},
       async check(){calls.usbCheck++;return{board:'C',status:'responded',bits:'0'.repeat(16)};},
       async scan(){calls.usbScan++;},async reset(){calls.usbReset++;},async connect(){calls.usbConnect++;},
+      stopDoorTest(){},
+      async openDoorTest(board,door,{onPhase,onSample,onCommand}){
+        calls.doorOpen++;doorTargets.push({board,door});
+        const sample=(value,bits)=>({board:value,status:'responded',bits,at:'2026-11-18T12:00:00.000Z',elapsedMs:5});
+        for(const value of flow.BOARDS)onSample('baseline',sample(value,'0'.repeat(16)));
+        if(doorPreflightFailure)throw Object.assign(Error(doorPreflightFailure),{code:'BASELINE'});
+        onCommand({openAttempted:true,openSent:!doorFailure,offSent:true,offAttempted:true,openAt:'2026-11-18T12:00:00.100Z',offAt:'2026-11-18T12:00:00.600Z',code:doorOffFailure?'LOCK_OFF':'',error:doorOffFailure?'Controller rejected the lock-off command.':''});
+        onPhase('Watching the selected column…');
+        onSample('open',sample(board,'0'.repeat(14)+'11'));
+        if(holdDoorOpen)await new Promise(resolve=>{releaseDoor=resolve;});
+        if(doorFailure||doorOffFailure)throw Error(doorFailure||'Controller rejected the lock-off command.');
+      },
+      async readDoorTestInputs(board,{onSample}){calls.doorRead++;for(const value of flow.BOARDS)onSample({board:value,status:'responded',bits:'0'.repeat(16),at:'2026-11-18T12:00:01.000Z',elapsedMs:5});},
     };
     onSave(clone(usbData));return usb;
   }
   const setTimer=callback=>{const id=timerId++;timers.set(id,callback);return id;};
-  const context=vm.createContext({...flow,...records,...driveHelpers,...storageHelpers,
+  const context=vm.createContext({...flow,...records,...driveHelpers,...storageHelpers,...doorTests,
     // Production ESM modules share a realm. Normalize the VM/host boundary here
     // so its plain step-log objects reach the real validator as plain objects.
     createReportRecord:(session,options)=>records.createReportRecord(structuredClone(session),options),
-    DriveReportClient,GuidedConnection,mountUsbPanel,shouldProceed:snapshot=>snapshot.phase==='ready',
+    DriveReportClient,GuidedConnection,mountUsbPanel,createDoorGuide,shouldProceed:snapshot=>snapshot.phase==='ready',
     FIELD_REPORTS:{endpoint:'https://script.google.com/macros/s/TEST/exec'},
     document,window,localStorage:storage,crypto:{randomUUID(){calls.uuid++;return uuid();}},
     navigator:{clipboard:{writeText:async()=>{}}},structuredClone,
@@ -118,8 +135,14 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   });
   function flush(){for(let runs=0;microtasks.length;runs++){assert.ok(runs<100,'boot microtasks must settle');microtasks.shift()();}}
   new vm.Script(appSource,{filename:appUrl.pathname}).runInContext(context);flush();
-  const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,initial:s.initial,recheck:s.recheck,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
-  return{storage,document,calls,state,fire,flush,drivePayloads,
+  const state=()=>JSON.parse(vm.runInContext('JSON.stringify({id:s.reportId,step:s.step,details:s.details,initial:s.initial,recheck:s.recheck,doorTests:s.doorTests,history:s.history,log:s.log,mode:reportMode,pending:pendingRecord,saved:savedRecord,recovery:recoveryContext})',context));
+  return{storage,document,calls,state,fire,flush,drivePayloads,doorTargets,
+    enterDoorStep(){vm.runInContext("go('doors','Test fixture completed communication checks')",context);flush();},
+    releaseDoor(){releaseDoor?.();},
+    change(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI input exists: '+id);element.value=value;element.dispatch('change');flush();},
+    type(id,value){const element=document.querySelector('#'+id);assert.ok(element,'actual UI field exists: '+id);element.value=value;element.dispatch('input');flush();},
+    check(id,value=true){const element=document.querySelector('#'+id);assert.ok(element,'actual UI checkbox exists: '+id);element.checked=value;element.dispatch('change');flush();},
+    selectData(attribute,value){const element=document.querySelectorAll('['+attribute+']').find(item=>item.getAttribute(attribute)===value);assert.ok(element,'actual UI choice exists: '+attribute+' '+value);element.click();flush();},
     async settle(){for(let i=0;i<8;i++){await Promise.resolve();flush();}},
     recoveries:()=>JSON.parse(vm.runInContext('JSON.stringify(recoveryEntries.map(item=>({id:item.id,kind:item.kind})))',context)),
     async openRecovery(id){
@@ -136,7 +159,7 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
 }
 
 function noAutomaticIO(app){
-  for(const key of ['usbCheck','usbScan','usbReset','usbConnect','guidedStart','driveSave','library'])assert.equal(app.calls[key],0,key);
+  for(const key of ['usbCheck','usbScan','usbReset','usbConnect','doorOpen','doorRead','guidedStart','driveSave','library'])assert.equal(app.calls[key],0,key);
 }
 
 function freshWelcome(app,oldIds=[]){
@@ -182,7 +205,7 @@ test('each ordinary app load starts a blank welcome test with a new UUID',()=>{
 });
 
 test('legacy live, frozen and saved records never choose the startup screen or replay locker commands',()=>{
-  for(const oldStep of ['connect','reset','initial','result']){
+  for(const oldStep of ['connect','reset','initial','doors','result']){
     const fixture=archivedFixtures(oldStep),storage=new MemoryStorage(fixture.entries);
     const app=boot(storage,{usbConnected:true});
     freshWelcome(app,fixture.ids);
@@ -351,4 +374,98 @@ test('board identification gates the power step and preserves labels through a f
   assert.deepEqual(reopened.state().pending,frozen);
   for(const[key,value]of Object.entries(identification))assert.equal(reopened.state().pending.session.details[key],value);
   noAutomaticIO(reopened);
+});
+
+test('door opening requires a chosen door and explicit readiness, blocks report changes during I/O, and never replays on render',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true,holdDoorOpen:true});
+  app.enterDoorStep();assert.equal(app.state().step,'doors');
+  assert.equal(app.calls.doorOpen,0);assert.equal(app.document.querySelector('#next').disabled,true);
+  app.selectData('data-door-setup','original');
+  app.change('door-number','1');assert.equal(app.calls.doorOpen,0);
+  assert.equal(app.document.querySelector('#door-open').disabled,true);
+  app.check('door-ready');assert.equal(app.calls.doorOpen,0);
+  app.click('door-open');
+  assert.equal(app.calls.doorOpen,1);
+  for(const id of ['save-report','restart','recover-reports','saved-reports','back','next'])assert.equal(app.document.querySelector('#'+id).disabled,true,id+' stays disabled during the opening check');
+  app.click('save-report');app.click('restart');assert.equal(app.calls.driveSave,0);
+  app.releaseDoor();await app.settle();
+  assert.equal(app.state().doorTests.banks.A.command.open.status,'sent');
+  app.selectData('data-door-answer','opened:yes');
+  app.click('door-read-closed');await app.settle();
+  app.selectData('data-door-answer','closed:yes');app.click('door-complete');
+  assert.equal(app.state().doorTests.banks.A.status,'tested');
+  app.selectData('data-door-bank','A');
+  assert.equal(app.document.querySelector('#door-open'),null,'completed attempt has no Open button');
+  app.selectData('data-door-bank','C');app.selectData('data-door-bank','A');
+  assert.equal(app.calls.doorOpen,1,'bank selection and renders do not activate outputs');
+  app.type('door-remaining-reason','Remaining columns unavailable during this software test.');app.click('door-skip-remaining');
+  assert.equal(app.document.querySelector('#next').disabled,false);
+  app.click('next');assert.equal(app.state().step,'result');
+  app.click('back');assert.equal(app.state().step,'doors');assert.equal(app.calls.doorOpen,1);
+  app.click('next');assert.equal(app.state().step,'result');assert.equal(app.calls.doorOpen,1);
+  app.click('save-result');await app.settle();
+  assert.equal(app.state().mode,'pending');
+  const frozen=app.state().pending;
+  assert.equal(frozen.session.doorTests.banks.A.operator.opened,'yes');
+  assert.equal(frozen.session.doorTests.banks.B.status,'skipped');
+  assert.match(frozen.reportText,/ONE DOOR PER COLUMN/);
+  assert.match(frozen.reportText,/Operator observed physically opened: yes/);
+  assert.match(frozen.reportText,/A: 1, 2/);
+  assert.match(frozen.reportText,/Remaining columns unavailable during this software test\./);
+  const reopened=boot(app.storage,{usbConnected:true});freshWelcome(reopened,[frozen.id]);
+  reopened.click('recover-reports');await reopened.openRecovery(frozen.id);
+  assert.deepEqual(reopened.state().pending,frozen);assert.equal(reopened.calls.doorOpen,0);
+});
+
+test('one explicit selected-door opening is recorded for each of A B C D E before the final report',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true});app.enterDoorStep();
+  app.selectData('data-door-setup','original');
+  for(const [index,board] of flow.BOARDS.entries()){
+    app.selectData('data-door-bank',board);app.change('door-number',String(index+1));app.check('door-ready');
+    assert.equal(app.calls.doorOpen,index);
+    app.click('door-open');await app.settle();
+    app.selectData('data-door-answer','opened:yes');app.click('door-read-closed');await app.settle();
+    app.selectData('data-door-answer','closed:yes');app.click('door-complete');
+    assert.equal(app.state().doorTests.banks[board].status,'tested');
+    assert.equal(app.calls.doorOpen,index+1);
+    assert.equal(app.document.querySelector('#next').disabled,index!==4);
+  }
+  assert.deepEqual(app.doorTargets,flow.BOARDS.map((board,index)=>({board,door:index+1})));
+  app.click('next');assert.equal(app.state().step,'result');assert.equal(app.calls.doorOpen,5);
+});
+
+test('an unavailable USB connection can finish with explicit reasons for all five uncompleted door tests',()=>{
+  const app=boot();app.enterDoorStep();
+  app.selectData('data-door-setup','original');app.change('door-number','16');app.check('door-ready');
+  assert.equal(app.document.querySelector('#door-open').disabled,true);
+  app.click('door-open');assert.equal(app.calls.doorOpen,0);
+  app.type('door-remaining-reason','No USB connection could be established.');app.click('door-skip-remaining');
+  for(const board of flow.BOARDS){assert.equal(app.state().doorTests.banks[board].status,'skipped');assert.equal(app.state().doorTests.banks[board].skipReason,'No USB connection could be established.');}
+  app.click('next');assert.equal(app.state().step,'result');assert.equal(app.calls.doorOpen,0);
+});
+
+test('preflight failure records no opening command and requires readiness again before an explicit retry',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true,doorPreflightFailure:'Selected column did not reply before opening.'});
+  app.enterDoorStep();app.selectData('data-door-setup','original');
+  app.change('door-number','17');assert.equal(app.state().doorTests.banks.A.door,null);
+  app.change('door-number','1');app.check('door-ready');app.click('door-open');await app.settle();
+  assert.equal(app.state().doorTests.banks.A.command.open,null);
+  assert.equal(app.state().doorTests.banks.A.status,'testing');
+  assert.equal(app.document.querySelector('#door-open').disabled,true);
+  assert.equal(app.document.querySelectorAll('[data-door-answer]').length,0,'no physical opening is inferred from a preflight failure');
+  app.type('door-skip-reason','The starting sensor reading could not be confirmed.');app.click('door-skip');
+  assert.equal(app.state().doorTests.banks.A.status,'skipped');
+  assert.equal(app.state().doorTests.banks.A.command.open,null);
+});
+
+test('a controller-rejected lock-off stays uncertain even if its USB bytes were transmitted',async()=>{
+  const app=boot(new MemoryStorage(),{usbConnected:true,doorOffFailure:true});
+  app.enterDoorStep();app.selectData('data-door-setup','original');app.change('door-number','1');app.check('door-ready');
+  app.click('door-open');await app.settle();
+  const item=app.state().doorTests.banks.A;
+  assert.equal(item.command.open.status,'sent');assert.equal(item.command.lockOff.status,'uncertain');
+  assert.equal(item.command.lockOff.code,'LOCK_OFF');
+  assert.equal(item.command.open.at,'2026-11-18T12:00:00.100Z');
+  assert.equal(item.command.lockOff.at,'2026-11-18T12:00:00.600Z');
+  assert.match(doorTests.formatDoorTests(app.state().doorTests),/Lock-off command: uncertain.*LOCK_OFF/);
 });

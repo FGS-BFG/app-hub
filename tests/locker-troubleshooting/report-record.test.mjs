@@ -56,6 +56,52 @@ test('board identification is frozen in the report text uploaded to Drive',()=>{
   assert.equal(payloadForDrive(roundTrip(record)).reportText,payload.reportText);
 });
 
+test('door commands, operator observations and transient samples are independently frozen for Drive retries',()=>{
+  const session=recordedSession(),door=session.doorTests.banks.A;
+  session.doorTests.setup={connections:'original',note:'Connections returned to original banks.'};
+  Object.assign(door,{status:'tested',door:6,startedAt:savedAt,completedAt:'2026-11-17T15:30:20.000Z',
+    command:{open:{status:'sent',at:savedAt,raw:'Open command bytes\r'},lockOff:{status:'error',at:savedAt,code:'WRITE',error:'Lock-off transmission not confirmed.'}},
+    operator:{opened:'yes',closed:'uncertain'}});
+  door.snapshots.baseline.A={board:'A',status:'responded',bits:'0000000000000000',at:savedAt};
+  door.samples.push({phase:'open',board:'A',status:'responded',bits:'0000000000000001',at:savedAt,elapsedMs:42});
+  door.snapshots.closed.A={board:'A',status:'responded',bits:'0000000000000000',at:'2026-11-17T15:30:20.000Z'};
+  const record=createReportRecord(session,options),frozenText=record.reportText;
+  assert.equal(Object.isFrozen(record.session.doorTests.banks.A.samples[0]),true);
+  assert.match(frozenText,/selected door 6/);assert.match(frozenText,/Lock-off transmission not confirmed/);
+  assert.match(frozenText,/open A .*\(BIN\) 0000000000000001 42 ms/);
+  door.door=10;door.samples[0].bits='1111111111111111';door.command.lockOff.error='Changed live error';
+  const restored=roundTrip(record),payload=payloadForDrive(restored);
+  assert.equal(restored.session.doorTests.banks.A.door,6);
+  assert.equal(restored.session.doorTests.banks.A.samples[0].bits,'0000000000000001');
+  assert.equal(payload.reportText,frozenText);assert.doesNotMatch(payload.reportText,/Changed live error/);
+  assert.equal(payload.savedAt,savedAt);assert.equal(payload.id,id);
+});
+
+test('malformed new door evidence is rejected before freezing and before a restored retry is sent',()=>{
+  const session=recordedSession();session.doorTests.banks.B.door=17;
+  assert.throws(()=>createReportRecord(session,options),/Invalid door tests/);
+  const restored=roundTrip(createReportRecord(recordedSession(),options));
+  restored.session.doorTests.banks.C.samples=[{phase:'open',board:'C',status:'responded',bits:'broken',at:savedAt}];
+  assert.throws(()=>payloadForDrive(restored),/16 binary inputs/);
+});
+
+test('legacy sessions without door evidence remain readable and older frozen retry text is never regenerated',()=>{
+  const session=recordedSession();delete session.doorTests;
+  const record=createReportRecord(session,options);
+  assert.match(record.reportText,/Not recorded in this older session/);
+  const old=roundTrip(record);old.reportText='Original immutable report text from before door tests.';
+  assert.equal(payloadForDrive(old).reportText,old.reportText);
+  assert.equal(Object.hasOwn(old.session,'doorTests'),false);
+});
+
+test('door-only selections and explicit skips are meaningful but fresh door containers are not data',()=>{
+  assert.equal(hasReportData(freshSession()),false);
+  const selected=freshSession();selected.doorTests.banks.D.door=12;
+  assert.equal(hasReportData(selected),true);assert.doesNotThrow(()=>createReportRecord(selected,options));
+  const skipped=freshSession();Object.assign(skipped.doorTests.banks.E,{status:'skipped',skipReason:'No USB connection.',completedAt:savedAt});
+  assert.equal(hasReportData(skipped),true);assert.doesNotThrow(()=>createReportRecord(skipped,options));
+});
+
 test('identification alone is meaningful draft data and optional fields retain their size limits',()=>{
   for(const [field,value] of Object.entries({boardConfiguration:'unsure',masterBoardLabel:'MCI label',slaveBoardLabels:'A: label',configurationNotes:'Could not read the label.'})){
     const session=freshSession();session.details[field]=value;

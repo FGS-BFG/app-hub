@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BOARDS, BOARD_CONFIGURATIONS, freshSession, allChecked, allResponded, failedBoards,
+  BOARDS, BOARD_CONFIGURATIONS, STAGES, freshSession, allChecked, allResponded, failedBoards,
   workingNeighbors, swapFinding, validateStep, nextStep, outcome, report,
 } from '../../locker-troubleshooting/flow.js';
 
@@ -83,7 +83,7 @@ test('initial ISB check requires an explicit valid answer for every board', () =
     s.initial[board]='responded';
   }
   assert.equal(validateStep(s), true);
-  assert.equal(nextStep(s), 'result');
+  assert.equal(nextStep(s), 'doors');
   s.initial.C='unknown';
   assert.equal(allChecked(s.initial), false);
   assert.equal(nextStep(s), null);
@@ -130,7 +130,7 @@ test('a recovered COM connection permits the actual master reset and fresh five-
   assert.equal(s.step, 'recheck');
   assert.equal(nextStep(s), null);
   for(const board of BOARDS) s.recheck[board]='responded';
-  assert.equal(nextStep(s), 'result');
+  assert.equal(nextStep(s), 'doors');
   assert.equal(outcome(s).kind, 'success');
   const text=report(s);
   assert.match(text, /USB COM CONNECTION\nConnected/);
@@ -157,7 +157,7 @@ test('each initial failure follows self-test, master reset and a fresh five-boar
     assert.equal(s.step, 'recheck');
     assert.equal(nextStep(s), null);
     s.recheck=replies();
-    assert.equal(nextStep(s), 'result');
+    assert.equal(nextStep(s), 'doors');
     assert.equal(outcome(s).kind, 'success');
   }
 });
@@ -173,7 +173,7 @@ test('failed or uncertain self-test does not invent a failed component or skip t
 
 test('master C failure after reset stops the slave comparison without assigning hardware blame', () => {
   const s={...freshSession(), step:'recheck', initial:replies('A','C'), recheck:replies('C')};
-  assert.equal(nextStep(s), 'result');
+  assert.equal(nextStep(s), 'doors');
   assert.equal(outcome(s).kind, 'unresolved');
   assert.match(outcome(s).title, /Master C/);
   assert.match(outcome(s).next, /no board, cable or hub fault has been established/);
@@ -242,7 +242,7 @@ test('a fault moving to the comparison board leads to the cable check', () => {
 test('a fault staying on the original board is a possible board fault only', () => {
   const s=comparison('no-response','responded');
   assert.equal(swapFinding(s), 'stayed');
-  assert.equal(nextStep(s), 'result');
+  assert.equal(nextStep(s), 'doors');
   assert.equal(outcome(s).title, 'Board A could be responsible');
   assert.equal(outcome(s).kind, 'possible');
   assert.match(outcome(s).next, /not been confirmed/);
@@ -251,7 +251,7 @@ test('a fault staying on the original board is a possible board fault only', () 
 test('both boards responding after the swap does not identify a failed component', () => {
   const s=comparison('responded','responded');
   assert.equal(swapFinding(s), 'cleared');
-  assert.equal(nextStep(s), 'result');
+  assert.equal(nextStep(s), 'doors');
   assert.equal(outcome(s).kind, 'unresolved');
   assert.match(outcome(s).next, /No component has been identified/);
 });
@@ -259,7 +259,7 @@ test('both boards responding after the swap does not identify a failed component
 test('both boards failing after the swap is inconclusive', () => {
   const s=comparison('no-response','no-response');
   assert.equal(swapFinding(s), 'both-failed');
-  assert.equal(nextStep(s), 'result');
+  assert.equal(nextStep(s), 'doors');
   assert.equal(outcome(s).kind, 'unresolved');
   assert.match(outcome(s).title, /did not isolate/);
 });
@@ -269,7 +269,7 @@ test('cable replacement requires an explicit result and keeps the same hub compa
   assert.equal(nextStep(s), null);
   for(const response of ['responded','no-response','uncertain']) {
     const checked={...s,cable:response};
-    assert.equal(nextStep(checked), 'result');
+    assert.equal(nextStep(checked), 'doors');
     const result=outcome(checked);
     if(response==='responded') {
       assert.equal(result.kind, 'possible');
@@ -394,4 +394,29 @@ test('historical USB measurements prevent a no-ISB claim after disconnect clears
   assert.doesNotMatch(text, /No ISB checks were performed/);
   assert.match(text, /INITIAL ISB CHECK\n  A: not checked/);
   assert.match(text, /ISB#A: responded \(BIN\) 0000000011111111 61 ms/);
+});
+
+test('door attempts are a separate stage before the report and require five explicit completions',()=>{
+  const s=freshSession();s.step='doors';s.initial=replies();
+  const communicationFinding=outcome(s);
+  assert.equal(STAGES[3],'Test one door per column');assert.equal(STAGES[4],'Save the result');
+  assert.equal(validateStep(s),false);assert.equal(nextStep(s),null);
+  for(const bank of BOARDS){
+    Object.assign(s.doorTests.banks[bank],{status:'skipped',skipReason:'USB unavailable; no actuation attempted.',completedAt:'2026-11-18T11:00:00.000Z'});
+    if(bank!=='E')assert.equal(nextStep(s),null);
+  }
+  assert.equal(nextStep(s),'result');
+  assert.deepEqual(outcome(s),communicationFinding,'door completion does not change the communication diagnosis');
+  s.doorTests.banks.E.skipReason='';assert.equal(nextStep(s),null);
+  delete s.doorTests;assert.equal(nextStep(s),null,'older reports do not acquire completed door tests');
+});
+
+test('door observations appear separately from communication without reporting a functional pass',()=>{
+  const s=freshSession();s.initial=replies();
+  const text=report(s);
+  assert.match(text,/RESULT\nAll five boards responded/);
+  assert.match(text,/ONE DOOR PER COLUMN\nRecorded attempts: 0 tested; 0 skipped; 5 pending/);
+  assert.match(text,/not a door-function pass/);
+  assert.match(text,/Operator observed physically opened: Not recorded/);
+  assert.equal(s.doorTests.banks.A.command.open,null);
 });

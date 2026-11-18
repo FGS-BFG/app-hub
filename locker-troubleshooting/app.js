@@ -1,17 +1,19 @@
-import {BOARDS,BOARD_CONFIGURATIONS,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-identify';
-import {mountUsbPanel} from './usb-ui.js?v=20261117-drive';
+import {BOARDS,BOARD_CONFIGURATIONS,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-doors';
+import {mountUsbPanel} from './usb-ui.js?v=20261118-doors';
+import {createDoorGuide} from './door-ui.js?v=20261118-doors';
+import {doorTestSummary} from './door-test.js?v=20261118-doors';
 import {GuidedConnection,shouldProceed} from './guided-connection.js?v=20261117-drive';
-import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-identify';
+import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-doors';
 import {DriveReportClient,buildReportPayload,validateSaveResult} from './drive-reports.js';
 import {FIELD_REPORTS} from './drive-config.js';
-import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-identify';
+import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-doors';
 
 const drive=new DriveReportClient({endpoint:FIELD_REPORTS.endpoint});
 let checksPaused=false;
 let reportMode='live',pendingRecord=null,savedRecord=null,savedReceipt=null,reportError='',cacheError='';
 let recoveryContext=null,recoveryEntries=[];
 const volatilePending=new Map();
-const stages={welcome:0,identify:0,power:0,startup:0,connect:0,reset:0,initial:1,selftest:1,retry:2,recheck:2,select:2,connector:2,swap:2,cable:2,result:3};
+const stages={welcome:0,identify:0,power:0,startup:0,connect:0,reset:0,initial:1,selftest:1,retry:2,recheck:2,select:2,connector:2,swap:2,cable:2,doors:3,result:4};
 const PHOTO_SETUPS={
  'flat-input-sense':{label:'Flat Input Sense ribbons',master:'assets/master.png',slave:'assets/slave.png'},
  'individual-wires':{label:'Individual sensor wires',master:'assets/master-wired-labelled.png',slave:'assets/slave-wired-labelled.png'}
@@ -20,7 +22,7 @@ const $=q=>document.querySelector(q);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // A page opening is always a new physical test. Older browser records are
 // available only through explicit, read-only recovery; never replay their step.
-let s=freshSession(),usb,connection;
+let s=freshSession(),usb,connection,doorGuide;
 s.reportId=crypto.randomUUID();
 let entry=0,attempted=-1,checking=false,resetComplete=-1,physicalDone=false,readingBoard='',photo='master';
 let photoSetup='flat-input-sense';
@@ -32,13 +34,13 @@ function save(){const ok=hasReportData(s)?cacheSet(draftKey(s.reportId),s):cache
 function record(label){if(reportMode!=='live')return;s.log.push({at:new Date().toISOString(),label});save();}
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),2400);}
 function clearComparison(){s.affected='';s.neighbor='';s.swapped={};s.cable='';s.acknowledged=false;}
-function ioIdle(){return !checking&&!usb?.busy;}
+function ioIdle(){return !checking&&!usb?.busy&&!doorGuide?.busy;}
 function idle(){return reportMode==='live'&&ioIdle();}
-function go(step,label){if(reportMode!=='live')return;advancePending=false;connection.stop();usb.stopMonitor();clearInterval(selftestTimer);selftestTimer=null;selftestDeadline=0;s.history.push(s.step);if(label)record(label);s.step=step;entry++;attempted=-1;resetComplete=-1;physicalDone=false;readingBoard='';save();setContextPhoto();render(true);enterStep();}
+function go(step,label){if(reportMode!=='live')return;if(step==='result'&&s.step!=='doors')step='doors';advancePending=false;connection.stop();usb.stopMonitor();clearInterval(selftestTimer);selftestTimer=null;selftestDeadline=0;s.history.push(s.step);if(label)record(label);s.step=step;entry++;attempted=-1;resetComplete=-1;physicalDone=false;readingBoard='';save();setContextPhoto();render(true);enterStep();}
 function enterStep(){if(reportMode!=='live'||checksPaused)return;if(s.step==='connect'){connection.start();connection.notifyConnection(usb.connected);}else queueMicrotask(maybeRunStep);}
 function maybeRunStep(){if(reportMode!=='live'||checksPaused||!usb?.connected||!idle()||attempted===entry)return;if(['reset','retry'].includes(s.step)){attempted=entry;sendReset();}else if(['initial','recheck'].includes(s.step)){attempted=entry;runChecks(s.step,BOARDS);}}
 function canProceed(){if(reportMode!=='live'||checksPaused)return false;if(s.step==='connect')return !checking&&!advancePending&&usb.connected&&shouldProceed(snapshot());if(!idle())return false;if(['reset','retry'].includes(s.step))return usb.connected&&resetComplete===entry;if(s.step==='connector')return true;if(['swap','cable'].includes(s.step)&&!physicalDone)return usb.connected;if(['initial','recheck','swap','cable'].includes(s.step)&&Object.keys(s.checkErrors||{}).length)return false;return validateStep(s);}
-function nextLabel(){if(s.step==='welcome')return 'Start the guide';if(s.step==='swap'&&!physicalDone)return 'Connections swapped · Next';if(s.step==='cable'&&!physicalDone)return 'Cable replaced · Next';return 'Next';}
+function nextLabel(){if(s.step==='welcome')return 'Start the guide';if(s.step==='doors')return 'View final report';if(s.step==='swap'&&!physicalDone)return 'Connections swapped · Next';if(s.step==='cable'&&!physicalDone)return 'Cable replaced · Next';return 'Next';}
 function actions(){return `<div class="step-actions"><button id="back" class="back" ${s.history.length&&idle()?'':'disabled'}>← Back</button><button id="next" class="primary" ${canProceed()?'':'disabled'}>${nextLabel()} <span aria-hidden="true">→</span></button></div>`;}
 function note(text){return `<div class="note">${text}</div>`;}
 function success(title,text){return `<div class="guide-status good"><span aria-hidden="true">✓</span><div><strong>${title}</strong><p>${text}</p></div></div>`;}
@@ -48,6 +50,7 @@ function connectButton(){return `<button class="primary" id="guide-connect" ${us
 function reconnect(){return !usb.connected?`<div class="guide-status attention"><div><strong>The USB port is disconnected.</strong><p>Connect the black USB cable. Close the other locker applications, then choose the locker port.</p>${connectButton()}</div></div>`:'';}
 function problemExit(){return Object.keys(s.checkErrors||{}).length||!usb.connected?`<div class="guide-help">${Object.keys(s.checkErrors||{}).length?'<p>This check is incomplete. A USB error or unexpected reply does not identify a faulty board.</p>':''}<button class="secondary" id="retry-step" ${usb.connected&&idle()?'':'disabled'}>Try this check again</button><button class="text-button" id="finish-incomplete" ${idle()?'':'disabled'}>Save the incomplete result for support</button></div>`:'';}
 function boardResults(field,boards=BOARDS){const values=field==='cable'?{[s.neighbor]:s.cable}:s[field];return `<div class="guided-board-results" aria-label="Automatic board checks">${boards.map(b=>{const state=values[b];const text=state==='responded'?'Reply received':state==='no-response'?'No reply before the timeout':s.checkErrors?.[b]?'Check incomplete':checking&&readingBoard===b?'Checking now…':'Waiting for this check';return `<div class="guided-board-row ${state==='responded'?'pass':state==='no-response'||s.checkErrors?.[b]?'fail':''}"><b>${b}</b><div><strong>${b==='C'?'Master C':'Board '+b}</strong><span>${esc(text)}</span></div><span aria-hidden="true">${state==='responded'?'✓':checking&&readingBoard===b?'…':'·'}</span></div>`;}).join('')}</div>`;}
+function doorResultContent(){const summary=doorTestSummary(s.doorTests);return `<section class="door-result"><h2>Door checks</h2><p>${summary.tested} attempted · ${summary.skipped} not completed · ${summary.pending} pending</p><ul>${BOARDS.map(board=>{const item=summary.banks[board];return `<li><strong>${board}${item.door?' · door '+item.door:''}</strong>: ${item.status==='tested'?`operator opened=${esc(item.operatorOpened)}, closed=${esc(item.operatorClosed)}`:item.status==='skipped'?'not completed':'no completed result'}${item.commandIssues.length?' · command issue recorded':''}</li>`;}).join('')}</ul><p>Door observations and sensor readings are recorded separately from the communication result above.</p></section>`;}
 function identificationContent(){
  const selected=s.details.boardConfiguration;
  const photoChoices=BOARD_CONFIGURATIONS.filter(option=>PHOTO_SETUPS[option.id]);
@@ -76,13 +79,15 @@ function content(){switch(s.step){
  case 'connector':return `<h1>Before you move<br>the connections.</h1><p class="lede">We will compare board ${s.affected} with working board ${s.neighbor}.</p>${warning()}<p>Read these handling instructions. Then select Next to see which connections to swap.</p>${actions()}`;
  case 'swap':return !physicalDone?`<h1>Swap the connections<br>on ${s.affected} and ${s.neighbor}.</h1><p class="lede">Swap the communication connections at the two boards. Each board must now use the other board’s cable and hub connection.</p>${warning()}<p>Keep the board letters unchanged. If these connections are already swapped, leave them in place. Select Next when ready. We will check both boards.</p>${reconnect()}${actions()}`:`<h1>${checking?'We are checking both boards.':'The connection comparison is complete.'}</h1>${boardResults('swapped',[s.affected,s.neighbor])}${reconnect()}${problemExit()}${actions()}`;
  case 'cable':return !physicalDone?`<h1>Replace the suspect cable<br>with a working cable.</h1><p class="lede">Keep board ${s.neighbor} on the same suspect hub connection. Change only the cable.</p>${warning()}<p>When the working cable is in place, select Next. We will check board ${s.neighbor} again.</p>${reconnect()}<button class="text-button" id="cable-uncertain">I cannot complete this cable comparison</button>${actions()}`:`<h1>${checking?'We are checking the replacement cable.':'The cable check is complete.'}</h1>${boardResults('cable',[s.neighbor])}${reconnect()}${problemExit()}${actions()}`;
- case 'result':{const r=outcome(s);const values=allChecked(s.recheck)?s.recheck:s.initial;return `<div class="outcome-mark ${r.kind}" aria-hidden="true">${r.kind==='success'?'✓':'?'}</div><h1>${esc(r.title)}</h1><p class="lede">${esc(r.summary)}</p><div class="result-callout"><p>${esc(r.next)}</p></div><p class="check-progress">${allChecked(s.recheck)?'Repeat':'Initial'} board checks · before connection swaps</p><div class="result-chips">${BOARDS.map(b=>`<span>${b} · ${values[b]==='responded'?'replied':values[b]==='no-response'?'no reply':'not checked'}</span>`).join('')}</div><label class="field notes-label">Anything else you observed <span class="optional">optional</span><textarea data-detail="notes" maxlength="10000">${esc(s.details.notes)}</textarea></label><div class="step-actions result-actions"><button class="back" id="back" ${s.history.length&&idle()?'':'disabled'}>← Back</button><div class="report-actions"><button class="secondary" id="copy-report">Copy report</button><button class="secondary" id="download-report">Download copy</button><button class="primary" id="save-result">Save to Drive</button></div></div><button class="text-button" id="open-diagnostics">Open sensor monitoring and the USB log</button>`;}
+ case 'doors':return `<div id="door-guide"></div>${reconnect()}${actions()}`;
+ case 'result':{const r=outcome(s);const values=allChecked(s.recheck)?s.recheck:s.initial;return `<div class="outcome-mark ${r.kind}" aria-hidden="true">${r.kind==='success'?'✓':'?'}</div><h1>${esc(r.title)}</h1><p class="lede">${esc(r.summary)}</p><div class="result-callout"><p>${esc(r.next)}</p></div>${doorResultContent()}<p class="check-progress">${allChecked(s.recheck)?'Repeat':'Initial'} board checks · before connection swaps</p><div class="result-chips">${BOARDS.map(b=>`<span>${b} · ${values[b]==='responded'?'replied':values[b]==='no-response'?'no reply':'not checked'}</span>`).join('')}</div><label class="field notes-label">Anything else you observed <span class="optional">optional</span><textarea data-detail="notes" maxlength="10000">${esc(s.details.notes)}</textarea></label><div class="step-actions result-actions"><button class="back" id="back" ${s.history.length&&idle()?'':'disabled'}>← Back</button><div class="report-actions"><button class="secondary" id="copy-report">Copy report</button><button class="secondary" id="download-report">Download copy</button><button class="primary" id="save-result">Save to Drive</button></div></div><button class="text-button" id="open-diagnostics">Open sensor monitoring and the USB log</button>`;}
  }}
 function render(focus=false){
  if(reportMode!=='live'){renderReportView(focus);return;}
  const stage=stages[s.step];$('#stage-label').textContent=STAGES[stage];$('#guide-usb-status').textContent=usb?.connected?'USB port open':'USB not connected';
- $('#progress').innerHTML=STAGES.map((text,i)=>`<li class="${i===stage?'active':i<stage?'done':''}" ${i===stage?'aria-current="step"':''}><span class="progress-num">${i<stage?'✓':i+1}</span><div>${text}<small>${['Board setup, power and USB','Automatic board replies','Follow the next physical test','Save the evidence to Drive'][i]}</small></div></li>`).join('');
- $('#step').innerHTML=`<div class="eyebrow"><span class="mini-dot"></span>${stage===3?'YOUR RESULT':STAGES[stage]}</div>${content()}`;
+ $('#progress').innerHTML=STAGES.map((text,i)=>`<li class="${i===stage?'active':i<stage?'done':''}" ${i===stage?'aria-current="step"':''}><span class="progress-num">${i<stage?'✓':i+1}</span><div>${text}<small>${['Board setup, power and USB','Automatic board replies','Follow the next physical test','One door on A, B, C, D and E','Save the evidence to Drive'][i]}</small></div></li>`).join('');
+ $('#step').innerHTML=`<div class="eyebrow"><span class="mini-dot"></span>${stage===4?'YOUR RESULT':STAGES[stage]}</div>${content()}`;
+ if(s.step==='doors')doorGuide?.render($('#door-guide'));
  usb?.setControlsEnabled(s.step==='result'&&!checksPaused);refreshReportControls();$('#advanced-diagnostics').hidden=false;
  $('#storage-label').textContent=cacheError?'Browser progress could not be saved':'Draft kept on this device';
  if(checksPaused&&s.step!=='connect')$('#step').insertAdjacentHTML('afterbegin','<div class="note"><p>Automatic locker checks are paused.</p><button class="secondary" id="resume-report">Resume this report</button></div>');
@@ -163,7 +168,7 @@ function forkCurrentTestIfSaved(markerText){
 }
 function stopReportActivity(){
  advancePending=false;entry++;attempted=-1;resetComplete=-1;physicalDone=false;
- connection?.stop();usb?.stopMonitor();clearInterval(selftestTimer);selftestTimer=null;selftestDeadline=0;
+ connection?.stop();usb?.stopMonitor();doorGuide?.stop();clearInterval(selftestTimer);selftestTimer=null;selftestDeadline=0;
  usb?.setControlsEnabled(false);
 }
 function refreshReportControls(){
@@ -242,7 +247,7 @@ async function startFreshReport(){
   await usb?.disconnect();
   usb?.clear();
   const draft=freshSession();draft.mode='usb';draft.reportId=crypto.randomUUID();draft.usb=usb?.snapshot()||{};
-  s=draft;checksPaused=false;pendingRecord=null;savedRecord=null;savedReceipt=null;recoveryContext=null;photoSetup='flat-input-sense';
+  s=draft;doorGuide?.reset();checksPaused=false;pendingRecord=null;savedRecord=null;savedReceipt=null;recoveryContext=null;photoSetup='flat-input-sense';
   reportMode='live';entry++;attempted=-1;resetComplete=-1;physicalDone=false;readingBoard='';setContextPhoto();render(true);enterStep();
   return true;
  }catch(error){reportMode=previousMode;reportError='The new report could not be started: '+(error?.message||String(error));render(true);return false;}
@@ -274,6 +279,7 @@ $('#confirm-restart').addEventListener('click',()=>{if(!ioIdle()||['saving','cha
 s.mode='usb';
 usb=mountUsbPanel($('#usb-root'),{saved:s.usb,onSave:data=>{if(reportMode!=='live')return;s.usb=data;save();},onConnection:state=>{if(reportMode!=='live'||checksPaused){refreshReportControls();return;}resetComplete=-1;if(state.connected)s.connection='connected';if(state.error)s.connectionIssue=true;if(!state.connected){const field={initial:'initial',recheck:'recheck',swap:'swapped'}[s.step];if(field)s[field]={};if(s.step==='cable')s.cable='';}else attempted=-1;if(connection&&s.step==='connect')connection.notifyConnection(state.connected);if(usb){save();render();queueMicrotask(maybeRunStep);}},onBusy:refreshControls});
 function guidedChanged(){if(reportMode!=='live'||checksPaused||s.step!=='connect'||!usb)return;if(snapshot().phase==='attention')advancePending=false;render();if(advancePending&&shouldProceed(snapshot())&&!usb.busy)queueMicrotask(()=>{if(reportMode==='live'&&!checksPaused&&s.step==='connect'&&advancePending&&shouldProceed(snapshot())&&!usb.busy){advancePending=false;next();}});}
+doorGuide=createDoorGuide({document,getState:()=>s.doorTests,usb,isActive:()=>reportMode==='live'&&s.step==='doors'&&!checksPaused,onChange:()=>{save();refreshControls();},onBusy:refreshControls,onEvent:record});
 connection=new GuidedConnection({isConnected:()=>usb.connected,probe:()=>usb.check('C'),onChange:guidedChanged,onEvent:event=>record('Guided connection: '+event.message)});
 if(reportMode==='live')save();setContextPhoto();render();if(reportMode==='live')enterStep();
 // Back/forward navigation can revive an old document without running startup.

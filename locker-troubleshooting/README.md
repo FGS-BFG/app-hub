@@ -49,3 +49,13 @@ Open `http://127.0.0.1:8765/locker-troubleshooting/` for a local preview. `app.j
 The tests cover decision paths, reports, input mapping and mock serial streams. Browser USB checks used simulated replies, timeouts, malformed data, sensor changes and disconnection. A real authenticated Drive save and library read are verified with an FGS Workspace account. Physical locker operation, live retries and access with other Google accounts still need validation.
 
 This directory owns the GitHub Pages copy. The earlier private Sites version is separate and does not update automatically.
+
+## Guided door checks
+
+Before the final report, the operator tests one selected door on each of A, B, C, D and E. Record whether the original connections are restored or describe the changed connections fitted. Choose a door, confirm it is closed and clear, then select **Open door**. Opening requires that explicit click. Entering the step, Back, reconnecting, refresh and report recovery never activate outputs.
+
+The app requires fresh addressed starting readings from the selected column and master C. It uses the legacy 304 firmware-timed `LA0`–`LAF` command, with `LMX` to clear outputs on the selected bank before and after the intended 500 ms pulse. It requests one sensor reading during the pulse, watches the selected column for another 10 seconds, then reads the other columns. The operator records whether the door physically opened, closes it, reads the inputs again, and records whether it is now closed. Door numbers 1–16 use hardware outputs 0–F, matching the existing tester.
+
+Command transmission, raw sensor changes and physical observations remain separate evidence. No sensor polarity or door-to-input mapping is assumed. Short changes between reads can be missed. `Tested` records an attempted command and operator answers; it is not an automatic functional pass. Each column requires a recorded result or a reason why the check could not be completed. Reports retain per-bank snapshots, up to 200 polling samples, transmission times, operator answers and skip reasons.
+
+Other commands, navigation, saving and new reports are blocked during the door operation. Stop or hiding the page requests cancellation and scoped lock-off. Opening is never retried automatically. Failed lock-off blocks further activation on that connection. Quiet-mode commands have no required acknowledgement; completed USB writes establish transmission only. The 500 ms dwell depends on browser software. The firmware fallback uses the controller's existing timer configuration, whose installed behavior is unverified. USB loss or browser termination can prevent software lock-off. Physical operation and installed firmware timing still require a locker trial.

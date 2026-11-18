@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SerialTransport, SerialError } from '../../locker-troubleshooting/serial.js';
+import { SerialTransport, SerialError, DEFAULT_DOOR_PULSE_MS, MIN_DOOR_PULSE_MS,
+  MAX_DOOR_PULSE_MS } from '../../locker-troubleshooting/serial.js';
 
 const encoder = new TextEncoder();
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -9,9 +10,10 @@ const frame = (board, bits='0000000011111111') =>
 const isCode = code => error => error instanceof SerialError && error.code === code;
 
 class MockPort extends EventTarget {
-  constructor({onCommand, openError, writeError}={}) {
+  constructor({onCommand, onWrite, openError, writeError}={}) {
     super();
     this.onCommand = onCommand;
+    this.onWrite = onWrite;
     this.openError = openError;
     this.writeError = writeError;
     this.commands = [];
@@ -27,9 +29,10 @@ class MockPort extends EventTarget {
       cancel: () => { this.readCancelled = true; },
     });
     this.writable = new WritableStream({
-      write: bytes => {
+      write: async bytes => {
         if (this.writeError) throw this.writeError;
         const text = new TextDecoder().decode(bytes);
+        await this.onWrite?.(text, this);
         this.writes.push(text);
         this.pendingText += text;
         let ending;
@@ -336,4 +339,319 @@ test('a port-open failure is PORT and never establishes a usable connection', as
   assert.equal(port.readable.locked, false);
   assert.equal(port.writable.locked, false);
   assert.deepEqual(port.writes, []);
+});
+
+test('door pulses preclear and finally clear only the addressed board, without claiming physical success', async t => {
+  const {transport, port, events} = await opened(t);
+  const result = await transport.pulseDoor('D', 11, {durationMs:100});
+  assert.deepEqual(port.commands, ['LMX#D\r', 'LAA#D\r', 'ISB#D\r', 'LMX#D\r']);
+  assert.deepEqual(events.filter(e => e.type === 'tx').map(e => e.command), ['LMX#D', 'LAA#D', 'ISB#D', 'LMX#D']);
+  assert.equal(result.board, 'D');
+  assert.equal(result.door, 11);
+  assert.equal(result.openCommand, 'LAA#D');
+  assert.equal(result.offCommand, 'LMX#D');
+  assert.equal(result.durationMs, 100);
+  assert.equal(result.preclearSent, true);
+  assert.equal(result.openAttempted, true);
+  assert.equal(result.openSent, true);
+  assert.equal(result.offAttempted, true);
+  assert.equal(result.offSent, true);
+  assert.equal(result.offConfirmed, false);
+  assert.equal(result.cancelled, false);
+  assert.equal('opened' in result, false);
+  assert.equal(Number.isNaN(Date.parse(result.at)), false);
+  assert.ok(Date.parse(result.preclearAt) <= Date.parse(result.openAt));
+  assert.ok(Date.parse(result.openAt) < Date.parse(result.offAt));
+  assert.ok(Date.parse(result.offAt) <= Date.parse(result.at));
+  assert.equal(result.samples.length,1);
+  assert.equal(result.samples[0].status,'no-response');
+  assert.equal(transport.busy, false);
+  assert.equal(transport.connected, true);
+});
+
+test('door numbering maps exactly across both eight-output groups and hexadecimal boundaries', async t => {
+  const {transport, port} = await opened(t);
+  for (const [board, door, code] of [['A',1,'0'],['B',8,'7'],['C',9,'8'],['D',10,'9'],['E',16,'F']]) {
+    const result = await transport.pulseDoor(board, door, {durationMs:100});
+    assert.equal(result.openCommand, `LA${code}#${board}`);
+    assert.deepEqual(port.commands.slice(-4), [`LMX#${board}\r`, `LA${code}#${board}\r`, `ISB#${board}\r`, `LMX#${board}\r`]);
+  }
+});
+
+test('the default pulse is 500ms and exported duration limits remain narrow', async t => {
+  assert.equal(DEFAULT_DOOR_PULSE_MS, 500);
+  assert.equal(MIN_DOOR_PULSE_MS, 100);
+  assert.equal(MAX_DOOR_PULSE_MS, 2000);
+  const {transport} = await opened(t);
+  const result = await transport.pulseDoor('C', 1);
+  assert.equal(result.durationMs, 500);
+});
+
+test('invalid door requests cannot write or broaden the diagnostic command allowlist', async t => {
+  const {transport, port} = await opened(t);
+  for (const [board, door, options] of [
+    ['',1],['F',1],['a',1],['A\rLC',1],[null,1],['A',0],['A',17],['A',1.1],['A','1'],['A',NaN],
+    ['A',1,{durationMs:99}],['A',1,{durationMs:2001}],['A',1,{durationMs:100.5}],['A',1,{durationMs:'500'}],
+    ['A',1,{durationMs:Infinity}],['A',1,null],['A',1,[]],['A',1,{command:'LM0#B'}],['A',1,{offCommand:'LC'}],
+  ]) await assert.rejects(transport.pulseDoor(board, door, options), isCode('INVALID_COMMAND'));
+  for (const command of ['LM0#A', 'LA0#A', 'LMX#A', 'LC', 'DR1#C']) {
+    assert.throws(() => transport._begin(command, 'query', 'A'), isCode('INVALID_COMMAND'));
+  }
+  assert.deepEqual(port.writes, []);
+  assert.equal(transport.busy, false);
+});
+
+test('door pulses exclude queries, resets and other pulses until the final scoped OFF', async t => {
+  const {transport, port} = await opened(t);
+  const written = port.command();
+  const pending = transport.pulseDoor('A', 1, {durationMs:100});
+  assert.equal(await written, 'LMX#A\r');
+  await assert.rejects(transport.query('B'), isCode('BUSY'));
+  await assert.rejects(transport.resetMaster(), isCode('BUSY'));
+  await assert.rejects(transport.pulseDoor('E', 16, {durationMs:100}), isCode('BUSY'));
+  await pending;
+  assert.deepEqual(port.commands, ['LMX#A\r', 'LA0#A\r', 'ISB#A\r', 'LMX#A\r']);
+});
+
+test('a failed initial scoped clear forbids ON and blocks further activations', async t => {
+  const {transport, port} = await opened(t, {writeError:new Error('Initial clear write failed')});
+  await assert.rejects(transport.pulseDoor('B', 8, {durationMs:100}), error => {
+    assert.equal(error.code, 'LOCK_OFF');
+    assert.equal(error.evidence.preclearAttempted, true);
+    assert.equal(error.evidence.preclearSent, false);
+    assert.equal(error.evidence.openAttempted, false);
+    assert.equal(error.evidence.openSent, false);
+    return true;
+  });
+  assert.deepEqual(port.commands, []);
+  assert.equal(transport.activationBlocked, true);
+  await assert.rejects(transport.pulseDoor('B', 8), isCode('ACTIVATION_BLOCKED'));
+});
+
+test('an ambiguous rejected ON write still attempts OFF, never retries ON, and preserves evidence', async t => {
+  const {transport, port, events} = await opened(t, {onCommand(command) {
+    if (command === 'LA8#E\r') throw new Error('Write rejected after bytes may have reached the controller');
+  }});
+  await assert.rejects(transport.pulseDoor('E', 9, {durationMs:100}), error => {
+    assert.equal(error.code, 'LOCK_OFF');
+    assert.equal(error.evidence.openAttempted, true);
+    assert.equal(error.evidence.openSent, false);
+    assert.equal(error.evidence.offAttempted, true);
+    assert.equal(error.evidence.offSent, false);
+    assert.equal(error.evidence.offConfirmed, false);
+    return true;
+  });
+  assert.deepEqual(port.commands, ['LMX#E\r', 'LA8#E\r']);
+  assert.deepEqual(events.filter(e => e.type === 'tx').map(e => e.command), ['LMX#E', 'LA8#E', 'LMX#E']);
+  assert.equal(transport.activationBlocked, true);
+  assert.equal(transport.connected, false);
+  assert.equal(transport.busy, false);
+});
+
+test('failed final OFF blocks activation on this transport even if later diagnostic state changes', async t => {
+  let clears = 0;
+  const {transport, port} = await opened(t, {onCommand(command) {
+    if (command === 'LMX#C\r' && ++clears === 2) throw new Error('Final OFF failed');
+  }});
+  await assert.rejects(transport.pulseDoor('C',16,{durationMs:100}), error => {
+    assert.equal(error.code, 'LOCK_OFF');
+    assert.equal(error.evidence.openSent, true);
+    assert.equal(error.evidence.offAttempted, true);
+    assert.equal(error.evidence.offSent, false);
+    return true;
+  });
+  assert.deepEqual(port.commands, ['LMX#C\r', 'LAF#C\r', 'ISB#C\r', 'LMX#C\r']);
+  assert.equal(transport.activationBlocked, true);
+  assert.match(transport.activationBlockReason, /unknown/);
+  transport.connected = true; // Neither a status flag nor an idle port releases this latch.
+  await assert.rejects(transport.pulseDoor('C',1), isCode('ACTIVATION_BLOCKED'));
+  transport.connected = false;
+});
+
+test('an addressed controller rejection after ON still sends the scoped OFF', async t => {
+  const {transport, port} = await opened(t, {onCommand(command,p) {
+    if (command === 'LA0#A\r') p.send('<A>Lock Events Deactivated~\r');
+  }});
+  await assert.rejects(transport.pulseDoor('A',1,{durationMs:100}), error => {
+    assert.equal(error.code, 'CONTROLLER');
+    assert.equal(error.evidence.openSent, true);
+    assert.equal(error.evidence.offSent, true);
+    return true;
+  });
+  assert.deepEqual(port.commands, ['LMX#A\r', 'LA0#A\r', 'LMX#A\r']);
+  assert.equal(transport.busy, false);
+});
+
+test('a delayed controller rejection of preclear forbids ON and blocks activation', async t => {
+  const {transport,port} = await opened(t, {onCommand(command,p) {
+    if(command === 'LMX#B\r') setTimeout(() => p.send('<B>Command Error:~\r'), 5);
+  }});
+  await assert.rejects(transport.pulseDoor('B',2,{durationMs:100}), error => {
+    assert.equal(error.code,'LOCK_OFF');
+    assert.equal(error.evidence.preclearSent,true);
+    assert.equal(error.evidence.openAttempted,false);
+    return true;
+  });
+  assert.deepEqual(port.commands,['LMX#B\r']);
+  assert.equal(transport.activationBlocked,true);
+});
+
+test('a delayed controller rejection of final OFF is distinct from successful transmission', async t => {
+  let clears = 0;
+  const {transport} = await opened(t, {onCommand(command,p) {
+    if(command === 'LMX#C\r' && ++clears === 2) setTimeout(() => p.send('<C>Command Error:~\r'), 5);
+  }});
+  await assert.rejects(transport.pulseDoor('C',2,{durationMs:100}), error => {
+    assert.equal(error.code,'LOCK_OFF');
+    assert.equal(error.evidence.openSent,true);
+    assert.equal(error.evidence.offSent,true);
+    assert.equal(error.evidence.offConfirmed,false);
+    return true;
+  });
+  assert.equal(transport.activationBlocked,true);
+});
+
+test('voluntary cancellation skips dwell and resolves final evidence after scoped OFF', async t => {
+  let openedDoor;
+  const on = new Promise(resolve => { openedDoor = resolve; });
+  const {transport, port} = await opened(t, {onCommand(command) { if(command === 'LA0#D\r') openedDoor(); }});
+  const rejection = assert.rejects(transport.pulseDoor('D',1,{durationMs:2000}), error => {
+    assert.equal(error.code, 'CANCELLED');
+    assert.equal(error.evidence.cancelled, true);
+    assert.equal(error.evidence.offSent, true);
+    return true;
+  });
+  await on;
+  const evidence = await transport.cancelDoorPulse();
+  await rejection;
+  assert.equal(evidence.cancelled, true);
+  assert.equal(evidence.offSent, true);
+  assert.deepEqual(port.commands, ['LMX#D\r', 'LA0#D\r', 'LMX#D\r']);
+  assert.equal(transport.connected, true);
+  assert.equal(transport.busy, false);
+});
+
+test('cancellation before the first frame cannot activate a door', async t => {
+  const {transport,port} = await opened(t);
+  const rejection = assert.rejects(transport.pulseDoor('A',1), isCode('CANCELLED'));
+  const evidence = await transport.cancelDoorPulse();
+  await rejection;
+  assert.equal(evidence.openAttempted, false);
+  assert.equal(evidence.openSent, false);
+  assert.deepEqual(port.commands, []);
+});
+
+test('close waits for scoped OFF before aborting the writer or releasing either stream', async t => {
+  let openedDoor;
+  const on = new Promise(resolve => { openedDoor = resolve; });
+  const {transport,port} = await opened(t, {onCommand(command) { if(command === 'LA7#B\r') openedDoor(); }});
+  const rejection = assert.rejects(transport.pulseDoor('B',8,{durationMs:2000}), isCode('CANCELLED'));
+  await on;
+  await transport.close();
+  await rejection;
+  assert.deepEqual(port.commands, ['LMX#B\r', 'LA7#B\r', 'LMX#B\r']);
+  assert.equal(transport.connected,false);
+  assert.equal(transport.busy,false);
+  assert.equal(port.readable.locked,false);
+  assert.equal(port.writable.locked,false);
+});
+
+test('a physical disconnect after ON reports uncertainty and attempts OFF before releasing the port', async t => {
+  const {transport,port,events} = await opened(t, {onCommand(command,p) {
+    if(command === 'LA0#E\r') p.disconnect();
+  }});
+  await assert.rejects(transport.pulseDoor('E',1,{durationMs:100}), error => {
+    assert.equal(error.code,'DISCONNECTED');
+    assert.equal(error.evidence.openSent,true);
+    assert.equal(error.evidence.offAttempted,true);
+    assert.equal(error.evidence.offConfirmed,false);
+    return true;
+  });
+  assert.deepEqual(events.filter(e => e.type === 'tx').map(e => e.command), ['LMX#E','LA0#E','LMX#E']);
+  assert.equal(transport.connected,false);
+  assert.equal(transport.activationBlocked,true);
+  assert.equal(port.readable.locked,false);
+  assert.equal(port.writable.locked,false);
+});
+
+test('a stalled USB write has a deadline, attempts OFF, and cannot hang or reopen the failed transport', async t => {
+  const {transport,events} = await opened(t, {onWrite(text,p) {
+    if(p.commands.length === 1 && p.pendingText === '') return new Promise(() => {});
+  }});
+  const started = Date.now();
+  await assert.rejects(transport.pulseDoor('A',1,{durationMs:100}), error => {
+    assert.equal(error.code,'LOCK_OFF');
+    assert.equal(error.evidence.openAttempted,true);
+    assert.equal(error.evidence.openSent,false);
+    assert.equal(error.evidence.offAttempted,true);
+    assert.equal(error.evidence.offSent,false);
+    return true;
+  });
+  assert.ok(Date.now() - started < 2000);
+  assert.deepEqual(events.filter(e => e.type === 'tx').map(e => e.command), ['LMX#A','LA0#A','LMX#A']);
+  assert.equal(transport.activationBlocked,true);
+  assert.equal(transport.connected,false);
+  assert.equal(transport.busy,false);
+  assert.equal(transport._closing,true);
+  await assert.rejects(transport.open(), isCode('BUSY'));
+});
+
+test('captures one addressed input sample during energization before the final OFF', async t => {
+  const {transport,port} = await opened(t, {onCommand(command,p) {
+    if(command === 'ISB#A\r') {
+      p.send(frame('B','1111111111111111'));
+      p.send(frame('A','1000000000000001'));
+    }
+  }});
+  const evidence = await transport.pulseDoor('A',1,{durationMs:100});
+  assert.deepEqual(port.commands,['LMX#A\r','LA0#A\r','ISB#A\r','LMX#A\r']);
+  assert.equal(evidence.samples.length,1);
+  assert.equal(evidence.samples[0].board,'A');
+  assert.equal(evidence.samples[0].status,'responded');
+  assert.equal(evidence.samples[0].bits,'1000000000000001');
+  assert.ok(Date.parse(evidence.openAt) <= Date.parse(evidence.samples[0].at));
+  assert.ok(Date.parse(evidence.samples[0].at) < Date.parse(evidence.offAt));
+  assert.match(evidence.samples[0].raw,/<A>Ex\(BIN\)/);
+  assert.equal(evidence.offConfirmed,false);
+});
+
+test('an absent status reply cannot extend the original ON dwell to the query timeout', async t => {
+  let onAt,offAt,clears=0;
+  const {transport} = await opened(t, {onCommand(command) {
+    if(command === 'LA0#A\r') onAt=Date.now();
+    if(command === 'LMX#A\r' && ++clears === 2) offAt=Date.now();
+  }}, {timeout:1500});
+  const evidence = await transport.pulseDoor('A',1,{durationMs:100});
+  assert.equal(evidence.samples[0].status,'no-response');
+  assert.equal(evidence.samples[0].code,'TIMEOUT');
+  assert.equal('bits' in evidence.samples[0],false);
+  assert.ok(offAt-onAt < 300, `OFF followed ON after ${offAt-onAt}ms`);
+});
+
+test('malformed during-pulse input is preserved as protocol evidence without suppressing OFF', async t => {
+  const {transport,port} = await opened(t, {onCommand(command,p) {
+    if(command === 'ISB#D\r') p.send('<D>Ex(BIN):00000000:11111112~\r');
+  }});
+  const evidence = await transport.pulseDoor('D',1,{durationMs:100});
+  assert.equal(evidence.samples[0].status,'error');
+  assert.equal(evidence.samples[0].code,'PROTOCOL');
+  assert.match(evidence.samples[0].raw,/11111112/);
+  assert.equal(evidence.offSent,true);
+  assert.equal(port.commands.at(-1),'LMX#D\r');
+});
+
+test('a disconnect during the internal status query preserves failed sample evidence and attempts OFF', async t => {
+  const {transport,events} = await opened(t, {onCommand(command,p) {
+    if(command === 'ISB#E\r') p.disconnect();
+  }});
+  await assert.rejects(transport.pulseDoor('E',1,{durationMs:100}), error => {
+    assert.equal(error.code,'DISCONNECTED');
+    assert.equal(error.evidence.samples.length,1);
+    assert.equal(error.evidence.samples[0].status,'error');
+    assert.equal(error.evidence.samples[0].code,'DISCONNECTED');
+    assert.equal(error.evidence.offAttempted,true);
+    return true;
+  });
+  assert.deepEqual(events.filter(e => e.type === 'tx').map(e => e.command),['LMX#E','LA0#E','ISB#E','LMX#E']);
+  assert.equal(transport.activationBlocked,true);
 });
