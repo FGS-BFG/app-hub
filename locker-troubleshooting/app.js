@@ -14,7 +14,7 @@ const volatilePending=new Map();
 const stages={welcome:0,identify:0,power:0,startup:0,connect:0,reset:0,initial:1,selftest:1,retry:2,recheck:2,select:2,connector:2,swap:2,cable:2,result:3};
 const PHOTO_SETUPS={
  'flat-input-sense':{label:'Flat Input Sense ribbons',master:'assets/master.png',slave:'assets/slave.png'},
- 'individual-wires':{label:'Individual sensor wires',master:'assets/master-wired-reference.jpg',slave:'assets/slave-wired-reference.jpg'}
+ 'individual-wires':{label:'Individual sensor wires',master:'assets/master-wired-labelled.png',slave:'assets/slave-wired-labelled.png'}
 };
 const $=q=>document.querySelector(q);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
