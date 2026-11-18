@@ -56,6 +56,36 @@ test('board identification is frozen in the report text uploaded to Drive',()=>{
   assert.equal(payloadForDrive(roundTrip(record)).reportText,payload.reportText);
 });
 
+test('capacity-only selection is meaningful and its label survives frozen Drive retries',()=>{
+  for(const capacity of ['80','64','32']){
+    const session=freshSession();session.details.lockerCapacity=capacity;
+    assert.equal(hasReportData(session),true);
+    const record=createReportRecord(session,options),text=record.reportText;
+    session.details.lockerCapacity=capacity==='80'?'32':'80';
+    assert.equal(record.session.details.lockerCapacity,capacity);
+    assert.ok(text.includes('Locker capacity: '+capacity+' bays'));
+    assert.equal(payloadForDrive(roundTrip(record)).reportText,text);
+  }
+});
+
+test('optional capacity accepts only blank or supported string IDs before freeze and restored transmission',()=>{
+  const blank=freshSession();assert.doesNotThrow(()=>createReportRecord(blank,options));
+  for(const value of [80,64,32,null,{},[],'16','80 bays',' 80']){
+    const session=freshSession();session.details.lockerCapacity=value;
+    assert.throws(()=>createReportRecord(session,options),/lockerCapacity/);
+    const restored=roundTrip(createReportRecord(freshSession(),options));
+    restored.session.details.lockerCapacity=value;
+    assert.throws(()=>payloadForDrive(restored),/lockerCapacity/);
+  }
+});
+
+test('older frozen records without capacity retain their exact retry wording',()=>{
+  const old=roundTrip(createReportRecord(recordedSession(),options));
+  assert.equal(Object.hasOwn(old.session.details,'lockerCapacity'),false);
+  old.reportText='Original frozen report before capacity selection.';
+  assert.equal(payloadForDrive(old).reportText,old.reportText);
+});
+
 test('door commands, operator observations and transient samples are independently frozen for Drive retries',()=>{
   const session=recordedSession(),door=session.doorTests.banks.A;
   session.doorTests.setup={connections:'original',note:'Connections returned to original banks.'};

@@ -1,4 +1,4 @@
-import {outcome, report} from './flow.js?v=20261118-doors';
+import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-capacity';
 import {validateDoorTests,hasDoorTestData} from './door-test.js?v=20261118-doors';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -14,6 +14,13 @@ function validateIdentity(id, savedAt) {
   if (typeof id !== 'string' || !UUID.test(id)) invalid('id must be a UUID.');
   if (typeof savedAt !== 'string' || !Number.isFinite(Date.parse(savedAt)) ||
       new Date(savedAt).toISOString() !== savedAt) invalid('savedAt must be an ISO UTC timestamp.');
+}
+
+function validateCapacity(details) {
+  const value=details?.lockerCapacity;
+  if(value!==undefined&&(typeof value!=='string'||!['',...LOCKER_CAPACITIES.map(option=>option.id)].includes(value))) {
+    invalid('session.details.lockerCapacity must be blank, 80, 64 or 32 as text.');
+  }
 }
 
 // Restrict snapshots to data that survives JSON storage without losing evidence.
@@ -61,6 +68,7 @@ function validateSession(session) {
   for (const key of ['location', 'technician', 'notes']) {
     if (typeof session.details[key] !== 'string') invalid('session.details.' + key + ' must be text.');
   }
+  validateCapacity(session.details);
   for (const [key,limit] of Object.entries({boardConfiguration:80,masterBoardLabel:160,slaveBoardLabels:500,configurationNotes:2000})) {
     const value=session.details[key];
     if (value!==undefined&&(typeof value!=='string'||value.length>limit)) invalid('session.details.'+key+' must be text of at most '+limit+' characters.');
@@ -123,6 +131,7 @@ export function payloadForDrive(record) {
     invalid('report text or metadata exceeds the supported length.');
   }
   if (!isObject(record.session)) invalid('saved session must be an object.');
+  validateCapacity(record.session.details);
   validateDoorTests(record.session.doorTests);
   // Retries send exactly the saved text. Never regenerate an old report using a
   // newer outcome/formatter, which may legitimately use different wording.
@@ -138,7 +147,7 @@ function hasEntries(value) {
 export function hasReportData(session) {
   if (!isObject(session)) return false;
   if (hasDoorTestData(session.doorTests)) return true;
-  if (['location', 'technician', 'notes', 'title', 'boardConfiguration', 'masterBoardLabel', 'slaveBoardLabels', 'configurationNotes'].some(key => hasText(session.details?.[key]))) return true;
+  if (['location', 'technician', 'notes', 'title', 'lockerCapacity', 'boardConfiguration', 'masterBoardLabel', 'slaveBoardLabels', 'configurationNotes'].some(key => hasText(session.details?.[key]))) return true;
   if (['connection', 'selftest', 'affected', 'neighbor', 'cable', 'title'].some(key => hasText(session[key]))) return true;
   if (session.connectionIssue === true || session.acknowledged === true) return true;
   if (['initial', 'recheck', 'swapped', 'checkErrors'].some(key =>

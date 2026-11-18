@@ -154,6 +154,7 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
     },
     input(field,value){const element=document.querySelectorAll('[data-detail]').find(x=>x.dataset.detail===field);assert.ok(element,'actual welcome input exists: '+field);element.value=value;element.dispatch('input');flush();},
     chooseConfiguration(value){const element=document.querySelectorAll('[data-board-configuration]').find(x=>x.dataset.boardConfiguration===value);assert.ok(element,'actual board configuration option exists: '+value);element.click();flush();},
+    chooseCapacity(value){const element=document.querySelectorAll('[data-locker-capacity]').find(x=>x.dataset.lockerCapacity===value);assert.ok(element,'actual capacity option exists: '+value);element.click();flush();},
     click(id){const element=document.querySelector('#'+id);assert.ok(element,'actual UI control exists: '+id);element.click();flush();},
   };
 }
@@ -165,7 +166,8 @@ function noAutomaticIO(app){
 function freshWelcome(app,oldIds=[]){
   const state=app.state();
   assert.equal(state.step,'welcome');assert.equal(state.mode,'live');
-  assert.deepEqual(state.details,{location:'',technician:'',notes:'',boardConfiguration:'',masterBoardLabel:'',slaveBoardLabels:'',configurationNotes:''});
+  assert.deepEqual(state.details,{location:'',technician:'',notes:'',lockerCapacity:'',boardConfiguration:'',masterBoardLabel:'',slaveBoardLabels:'',configurationNotes:''});
+  assert.equal(app.document.querySelector('#next').disabled,true,'a fresh test requires a capacity choice');
   assert.deepEqual(state.initial,{});assert.deepEqual(state.recheck,{});
   assert.deepEqual(state.history,[]);assert.deepEqual(state.log,[]);
   assert.equal(state.pending,null);assert.equal(state.saved,null);assert.equal(state.recovery,null);
@@ -217,7 +219,7 @@ test('legacy live, frozen and saved records never choose the startup screen or r
 test('reload creates a fresh test while preserving the previous per-ID draft unchanged',()=>{
   const storage=new MemoryStorage(),previous=boot(storage);
   previous.input('location','Test before reload');previous.input('technician','Operator before reload');
-  previous.click('next');assert.equal(previous.state().step,'identify');
+  previous.chooseCapacity('80');previous.click('next');assert.equal(previous.state().step,'identify');
   const previousId=previous.state().id,key=storageHelpers.draftKey(previousId),raw=storage.getItem(key);
   assert.ok(raw);
   const reopened=boot(storage);
@@ -245,7 +247,7 @@ test('two app contexts sharing localStorage autosave separate drafts without rep
 });
 
 test('returning focus from a popup preserves the in-progress test and does not reload',()=>{
-  const app=boot();app.input('location','Test remains open');app.click('next');
+  const app=boot();app.input('location','Test remains open');app.chooseCapacity('80');app.click('next');
   const before=app.state(),stored=[...app.storage.values];
   app.fire('blur');app.fire('focus');app.fire('focus');app.flush();
   assert.deepEqual(app.state(),before);assert.deepEqual([...app.storage.values],stored);
@@ -253,7 +255,7 @@ test('returning focus from a popup preserves the in-progress test and does not r
 });
 
 test('only a persisted pageshow requests reload; the replacement opening starts a fresh test',()=>{
-  const app=boot();app.input('location','Before back-forward restoration');app.click('next');
+  const app=boot();app.input('location','Before back-forward restoration');app.chooseCapacity('80');app.click('next');
   const before=app.state(),key=storageHelpers.draftKey(before.id),raw=app.storage.getItem(key);
   app.fire('pageshow',{persisted:false});app.fire('focus');app.flush();
   assert.deepEqual(app.state(),before);assert.equal(app.calls.reloads,0);
@@ -314,7 +316,7 @@ test('a frozen recovery retry survives Back in RAM when pending storage and Driv
 
 test('a validated saved marker from another window forks the live ID while invalid markers preserve it',()=>{
   const storage=new MemoryStorage(),app=boot(storage);
-  app.input('location','Continue this physical test');app.input('technician','Current operator');app.click('next');
+  app.input('location','Continue this physical test');app.input('technician','Current operator');app.chooseCapacity('80');app.click('next');
   const before=app.state(),oldDraftKey=storageHelpers.draftKey(before.id),oldDraft=storage.getItem(oldDraftKey);
   const markerKey=storageHelpers.savedKey(before.id),fileId='saved_in_other_window_123456789';
   const receipt={fileId,url:`https://drive.google.com/file/d/${fileId}/view`,reportId:before.id};
@@ -344,6 +346,7 @@ test('a validated saved marker from another window forks the live ID while inval
 test('board identification gates the power step and preserves labels through a frozen report and explicit recovery',async()=>{
   const storage=new MemoryStorage(),app=boot(storage,{driveFailure:'Simulated Drive rejection'});
   app.input('location','Configuration test site');app.input('technician','Configuration operator');
+  app.chooseCapacity('80');
   app.click('next');
   assert.equal(app.state().step,'identify');
   assert.equal(app.document.querySelector('#next').disabled,true);
@@ -468,4 +471,25 @@ test('a controller-rejected lock-off stays uncertain even if its USB bytes were 
   assert.equal(item.command.open.at,'2026-11-18T12:00:00.100Z');
   assert.equal(item.command.lockOff.at,'2026-11-18T12:00:00.600Z');
   assert.match(doorTests.formatDoorTests(app.state().doorTests),/Lock-off command: uncertain.*LOCK_OFF/);
+});
+
+test('each capacity needs an explicit choice and survives the report, reload and read-only recovery',async()=>{
+  for(const capacity of ['80','64','32']){
+    const app=boot();app.input('location','Capacity software check');app.input('technician','Operator');
+    assert.equal(app.state().details.lockerCapacity,'');assert.equal(app.document.querySelector('#next').disabled,true);
+    assert.deepEqual(app.document.querySelectorAll('[data-locker-capacity]').map(element=>element.dataset.lockerCapacity),['80','64','32']);
+    app.click('next');assert.equal(app.state().step,'welcome');
+    app.chooseCapacity(capacity);assert.equal(app.state().details.lockerCapacity,capacity);
+    assert.equal(app.document.querySelector('#next').disabled,false);noAutomaticIO(app);
+    app.click('next');assert.equal(app.state().step,'identify');
+    assert.match(app.state().log.at(-1).label,new RegExp(capacity+' bays'));
+    app.click('back');assert.equal(app.state().details.lockerCapacity,capacity);
+    app.click('save-report');await app.settle();
+    assert.equal(app.state().mode,'pending');
+    const frozen=app.state().pending;assert.equal(frozen.session.details.lockerCapacity,capacity);
+    assert.match(frozen.reportText,new RegExp('Locker capacity: '+capacity+' bays'));
+    const reopened=boot(app.storage);freshWelcome(reopened,[frozen.id]);
+    reopened.click('recover-reports');await reopened.openRecovery(frozen.id);
+    assert.deepEqual(reopened.state().pending,frozen);noAutomaticIO(reopened);
+  }
 });

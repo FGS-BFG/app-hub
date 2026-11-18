@@ -4,7 +4,7 @@ The maintained source and authenticated Google Drive backend are in the private 
 
 Use **Save to Drive** to freeze a report and save it through the authenticated Google portal. **Saved reports** opens the central library. **New report** starts a blank report after the current report is confirmed in Drive. Failed saves keep the same frozen report for retry. **Download copy** is separate from central saving.
 
-Every opening or refresh starts a new test at the welcome screen, with blank details and a new report ID. Old results and locker steps are never resumed automatically. Returning from Google sign-in keeps the test currently being saved.
+Every opening or refresh starts a new test at the welcome screen, with blank details and a new report ID. The operator must select 80, 64 or 32 bays before continuing. Capacity is recorded in drafts, saved/downloaded reports and frozen retries, with no preselected value on a new test. It is currently a report field: the physical checks still expect A–E with master C. Smaller-capacity board mappings must be confirmed before they can change the test targets. Old results and locker steps are never resumed automatically. Returning from Google sign-in keeps the test currently being saved.
 
 After location and name, an identification step shows both master/slave photo sets: flat Input Sense ribbons and individual sensor wires. Mixed and Not sure choices are available. Optional installed-board labels and configuration notes are included in the saved report. Copy the actual labels; reference photos do not identify installed firmware. The photo panel can display either setup without changing the recorded choice. This selection does not change the A–E / master C test protocol.
 

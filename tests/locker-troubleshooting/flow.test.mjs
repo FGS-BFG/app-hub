@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BOARDS, BOARD_CONFIGURATIONS, STAGES, freshSession, allChecked, allResponded, failedBoards,
+  BOARDS, BOARD_CONFIGURATIONS, LOCKER_CAPACITIES, STAGES, freshSession, allChecked, allResponded, failedBoards,
   workingNeighbors, swapFinding, validateStep, nextStep, outcome, report,
 } from '../../locker-troubleshooting/flow.js';
 
@@ -16,10 +16,36 @@ test('the guide asks for board identification after location and before the powe
   assert.equal(s.details.masterBoardLabel,'');
   assert.equal(s.details.slaveBoardLabels,'');
   assert.equal(s.details.configurationNotes,'');
+  assert.equal(s.details.lockerCapacity,'');
+  assert.equal(nextStep(s),null);
+  s.details.lockerCapacity='80';
   assert.equal(nextStep(s),'identify');
   assert.equal(nextStep({...s,step:'identify'}),null);
   assert.equal(nextStep({...s,step:'identify',details:{...s.details,boardConfiguration:'individual-wires'}}),'power');
   assert.equal(nextStep({...s,step:'power'}),'connect');
+});
+
+test('welcome requires an explicit supported capacity and reports its readable label without inferring banks',()=>{
+  assert.deepEqual(LOCKER_CAPACITIES,[{id:'80',label:'80 bays'},{id:'64',label:'64 bays'},{id:'32',label:'32 bays'}]);
+  assert.equal(Object.isFrozen(LOCKER_CAPACITIES),true);
+  for(const option of LOCKER_CAPACITIES){
+    assert.equal(Object.isFrozen(option),true);
+    const session=freshSession();session.details.lockerCapacity=option.id;
+    assert.equal(validateStep(session),true);assert.equal(nextStep(session),'identify');
+    assert.ok(report(session).includes('Locker capacity: '+option.label));
+    assert.deepEqual(Object.keys(session.doorTests.banks),['A','B','C','D','E']);
+    session.step='initial';session.initial={A:'responded',B:'responded'};
+    assert.equal(validateStep(session),false,'capacity alone does not supply a smaller board mapping');
+  }
+});
+
+test('unknown and missing capacity choices cannot advance welcome and legacy reports show not recorded',()=>{
+  for(const value of ['',undefined,null,80,'16','80 bays',' 80',{}]){
+    const session=freshSession();session.details.lockerCapacity=value;
+    assert.equal(validateStep(session),false);assert.equal(nextStep(session),null);
+  }
+  const old=freshSession();delete old.details.lockerCapacity;
+  assert.match(report(old),/Locker capacity: Not recorded/);
 });
 
 test('identification needs an explicit recognised choice and allows mixed or uncertain setups',()=>{
