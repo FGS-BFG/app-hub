@@ -58,6 +58,8 @@ This directory owns the GitHub Pages copy. The earlier private Sites version is 
 
 ## Guided door checks
 
+Choose a door on the visual column: 1–8 down the left and 9–16 down the right. Clicking highlights the selected door without sending a command. Changing the selection clears readiness. The separate **Open door** action remains required, and selection is locked during an active or recorded opening attempt. Reports retain the chosen door number and command evidence.
+
 The physical self-test screen includes **Need help finding the red button?**, with close-ups for both flat Input Sense ribbons and individual sensor wires. It defaults to the recorded setup and lets the operator switch the reference or enlarge the full-board photo. These help controls do not start the timer, send commands, change the recorded setup or choose an answer. The instructions identify the configured master, including B for 32 bays.
 
 Before the final report, the operator tests one selected door on each fitted column. Record whether the original connections are restored or describe the changed connections fitted. Choose a door, confirm it is closed and clear, then select **Open door**. Opening requires that explicit click. Entering the step, Back, reconnecting, refresh and report recovery never activate outputs. Absent columns are not queried or activated; direct USB reads, mixed scans and door commands to inactive addresses are rejected before I/O.

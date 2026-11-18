@@ -439,7 +439,7 @@ test('door opening requires a chosen door and explicit readiness, blocks report 
   app.enterDoorStep();assert.equal(app.state().step,'doors');
   assert.equal(app.calls.doorOpen,0);assert.equal(app.document.querySelector('#next').disabled,true);
   app.selectData('data-door-setup','original');
-  app.change('door-number','1');assert.equal(app.calls.doorOpen,0);
+  app.selectData('data-door-number','1');assert.equal(app.calls.doorOpen,0);
   assert.equal(app.document.querySelector('#door-open').disabled,true);
   app.check('door-ready');assert.equal(app.calls.doorOpen,0);
   app.click('door-open');
@@ -479,7 +479,7 @@ test('one explicit selected-door opening is recorded for each of A B C D E befor
   const app=boot(new MemoryStorage(),{usbConnected:true});app.enterDoorStep();
   app.selectData('data-door-setup','original');
   for(const [index,board] of flow.BOARDS.entries()){
-    app.selectData('data-door-bank',board);app.change('door-number',String(index+1));app.check('door-ready');
+    app.selectData('data-door-bank',board);app.selectData('data-door-number',String(index+1));app.check('door-ready');
     assert.equal(app.calls.doorOpen,index);
     app.click('door-open');await app.settle();
     app.selectData('data-door-answer','opened:yes');app.click('door-read-closed');await app.settle();
@@ -494,7 +494,7 @@ test('one explicit selected-door opening is recorded for each of A B C D E befor
 
 test('an unavailable USB connection can finish with explicit reasons for all five uncompleted door tests',()=>{
   const app=boot();app.enterDoorStep();
-  app.selectData('data-door-setup','original');app.change('door-number','16');app.check('door-ready');
+  app.selectData('data-door-setup','original');app.selectData('data-door-number','16');app.check('door-ready');
   assert.equal(app.document.querySelector('#door-open').disabled,true);
   app.click('door-open');assert.equal(app.calls.doorOpen,0);
   app.type('door-remaining-reason','No USB connection could be established.');app.click('door-skip-remaining');
@@ -505,8 +505,8 @@ test('an unavailable USB connection can finish with explicit reasons for all fiv
 test('preflight failure records no opening command and requires readiness again before an explicit retry',async()=>{
   const app=boot(new MemoryStorage(),{usbConnected:true,doorPreflightFailure:'Selected column did not reply before opening.'});
   app.enterDoorStep();app.selectData('data-door-setup','original');
-  app.change('door-number','17');assert.equal(app.state().doorTests.banks.A.door,null);
-  app.change('door-number','1');app.check('door-ready');app.click('door-open');await app.settle();
+  const invalidChoice=app.document.querySelector('[data-door-number="1"]');invalidChoice.dataset.doorNumber='17';invalidChoice.click();app.flush();assert.equal(app.state().doorTests.banks.A.door,null);invalidChoice.dataset.doorNumber='1';
+  app.selectData('data-door-number','1');app.check('door-ready');app.click('door-open');await app.settle();
   assert.equal(app.state().doorTests.banks.A.command.open,null);
   assert.equal(app.state().doorTests.banks.A.status,'testing');
   assert.equal(app.document.querySelector('#door-open').disabled,true);
@@ -518,7 +518,7 @@ test('preflight failure records no opening command and requires readiness again 
 
 test('a controller-rejected lock-off stays uncertain even if its USB bytes were transmitted',async()=>{
   const app=boot(new MemoryStorage(),{usbConnected:true,doorOffFailure:true});
-  app.enterDoorStep();app.selectData('data-door-setup','original');app.change('door-number','1');app.check('door-ready');
+  app.enterDoorStep();app.selectData('data-door-setup','original');app.selectData('data-door-number','1');app.check('door-ready');
   app.click('door-open');await app.settle();
   const item=app.state().doorTests.banks.A;
   assert.equal(item.command.open.status,'sent');assert.equal(item.command.lockOff.status,'uncertain');
@@ -560,7 +560,7 @@ test('32- and 64-bay communication checks and door steps use only their confirme
     assert.deepEqual(app.document.querySelectorAll('[data-door-bank]').map(element=>element.dataset.doorBank),targets);
     app.selectData('data-door-setup','original');
     for(const [index,board] of targets.entries()){
-      app.selectData('data-door-bank',board);app.change('door-number',String(index+1));app.check('door-ready');
+      app.selectData('data-door-bank',board);app.selectData('data-door-number',String(index+1));app.check('door-ready');
       app.click('door-open');await app.settle();
       app.selectData('data-door-answer','opened:yes');app.click('door-read-closed');await app.settle();
       app.selectData('data-door-answer','closed:yes');app.click('door-complete');
@@ -592,7 +592,7 @@ test('capacity changes reset blank door targets before testing and preserve the 
 
 test('a partial 32-bay B-master door-stage draft remains recoverable as read-only evidence without opening a door',async()=>{
   const app=boot(new MemoryStorage(),{usbConnected:true});app.enterDoorStep('32');
-  app.selectData('data-door-setup','original');app.change('door-number','1');app.check('door-ready');
+  app.selectData('data-door-setup','original');app.selectData('data-door-number','1');app.check('door-ready');
   app.click('door-open');await app.settle();
   const original=app.state(),key=storageHelpers.draftKey(original.id),raw=app.storage.getItem(key);
   assert.ok(raw);assert.equal(JSON.parse(raw).step,'doors');
@@ -771,7 +771,7 @@ test('detecting A under expected master C requires an explicit single-board choi
   assert.deepEqual(app.document.querySelectorAll('[data-door-bank]').map(element=>element.dataset.doorBank),['A']);
   assert.doesNotMatch(app.document.querySelector('#door-guide').innerHTML,/<b>A · master<\/b>/);
   assert.equal(app.calls.doorOpen,0,'selecting an address never opens a door');
-  app.selectData('data-door-setup','original');app.change('door-number','3');app.check('door-ready');
+  app.selectData('data-door-setup','original');app.selectData('data-door-number','3');app.check('door-ready');
   app.click('door-open');await app.settle();
   assert.deepEqual(app.doorTargets,[{board:'A',door:3}]);assert.equal(app.calls.usbReset,0);
   app.selectData('data-door-answer','opened:yes');app.click('door-read-closed');await app.settle();
@@ -791,7 +791,7 @@ test('an E response outside the 32-bay A,B layout is usable only after explicit 
   assert.deepEqual(app.queryTargets,['B','E']);assert.deepEqual(app.resetTargets,[]);
   app.click('next');assert.equal(app.state().step,'doors');
   assert.deepEqual(app.document.querySelectorAll('[data-door-bank]').map(element=>element.dataset.doorBank),['E']);
-  app.selectData('data-door-setup','original');app.change('door-number','16');app.check('door-ready');
+  app.selectData('data-door-setup','original');app.selectData('data-door-number','16');app.check('door-ready');
   app.click('door-open');await app.settle();assert.deepEqual(app.doorTargets,[{board:'E',door:16}]);
   assert.equal(app.calls.usbReset,0);assert.equal(app.calls.usbScan,0);
 });
@@ -868,4 +868,26 @@ test('a saved limited-board report freezes the discovery and original expected-m
   reopened.click('recover-reports');await reopened.openRecovery(frozen.id);
   assert.equal(reopened.state().pending.reportText,originalText);
   assert.deepEqual(reopened.state().pending.session.boardDetection,frozen.session.boardDetection);noAutomaticIO(reopened);
+});
+
+
+test('visual door choices select without opening and require readiness again after a change',()=>{
+ const app=boot(new MemoryStorage(),{usbConnected:true});app.enterDoorStep('32');
+ assert.equal(app.document.querySelector('#door-number'),null);
+ const choices=app.document.querySelectorAll('[data-door-number]');
+ assert.deepEqual(choices.map(item=>Number(item.dataset.doorNumber)),[1,9,2,10,3,11,4,12,5,13,6,14,7,15,8,16]);
+ assert.equal(choices.length,16);assert.equal(new Set(choices.map(item=>item.dataset.doorNumber)).size,16);
+ app.selectData('data-door-setup','original');
+ app.selectData('data-door-number','16');
+ assert.equal(app.state().doorTests.banks.A.door,16);
+ assert.equal(app.document.querySelector('[data-door-number="16"]').getAttribute('aria-pressed'),'true');
+ assert.equal(app.calls.doorOpen,0);
+ app.check('door-ready');assert.equal(app.document.querySelector('#door-open').disabled,false);
+ app.selectData('data-door-number','1');
+ assert.equal(app.document.querySelector('#door-ready').checked,false);
+ assert.equal(app.document.querySelector('#door-open').disabled,true);
+ assert.equal(app.document.querySelector('[data-door-number="16"]').getAttribute('aria-pressed'),'false');
+ assert.equal(app.calls.doorOpen,0);assert.equal(app.calls.usbCheck,0);assert.equal(app.calls.usbReset,0);
+ app.selectData('data-door-bank','B');assert.equal(app.state().doorTests.banks.B.door,null);
+ assert.equal(app.document.querySelectorAll('[data-door-number]').filter(item=>item.getAttribute('aria-pressed')==='true').length,0);
 });
