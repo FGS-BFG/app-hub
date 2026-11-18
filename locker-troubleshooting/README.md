@@ -12,7 +12,7 @@ Use **Unfinished tests** to recover a read-only report retained on this device, 
 
 Reports belong in **1-Current productions → Field reports**. The portal uses the accessing user's Google permissions. The existing endpoint was updated to version 2 on 18 November 2026 at 08:17 Europe/London. Google authorization, a real save from the public guide in Chrome, and a library read succeeded with an FGS Workspace account. The guide displayed the saved report as read-only. No USB hardware was connected. Live retry behavior and permissions for other users remain unverified.
 
-Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Close the other locker applications, then select the configured master's COM port when prompted.
+Open the [live guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/) in desktop Chrome or Edge on the computer connected to the locker. Close the parkIT app, then select the configured master's COM port when prompted.
 
 The guide walks through the mains cycle, master reset, five-board ISB checks, physical self-test and connection comparisons. It can monitor raw sensor inputs on one board or all five, and save a report with timestamps and raw USB traffic to Drive. Browser storage retains drafts and pending retries; a central save is confirmed by the Drive receipt.
 
@@ -20,7 +20,7 @@ The guide walks through the mains cycle, master reset, five-board ISB checks, ph
 
 Each screen gives the operator one action and a Next button. First, cycle the locker mains supply and wait for startup. The next screen asks the operator to connect the black USB cable and select the locker COM port.
 
-Opening the port does not confirm communication. The guide requires a valid input-status reply from the configured master. If the connection is not confirmed within 60 seconds, it asks the operator to check the power, cable and other locker applications, then retry or use the physical self-test.
+Opening the port does not confirm communication. The guide requires a valid input-status reply from the configured master. If the connection is not confirmed within 60 seconds, it asks the operator to check the power and cable, close the parkIT app, then retry or use the physical self-test.
 
 After the first valid reply, the guide watches the configured master for 60 seconds. A fresh final reply is required before Next becomes available. Failed replies or a disconnected USB port remove the ready status. Selecting Next sends the master reset automatically. After the reset wait, the next screen checks the fitted boards automatically.
 
