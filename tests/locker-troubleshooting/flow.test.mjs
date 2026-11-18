@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BOARDS, freshSession, allChecked, allResponded, failedBoards,
+  BOARDS, BOARD_CONFIGURATIONS, freshSession, allChecked, allResponded, failedBoards,
   workingNeighbors, swapFinding, validateStep, nextStep, outcome, report,
 } from '../../locker-troubleshooting/flow.js';
 
@@ -9,10 +9,50 @@ const replies = (...failed) => Object.fromEntries(
   BOARDS.map(board => [board, failed.includes(board) ? 'no-response' : 'responded']),
 );
 
-test('the generic guide starts with a blank location and moves from power to USB', () => {
+test('the guide asks for board identification after location and before the power cycle', () => {
   const s=freshSession();
   assert.equal(s.details.location,'');
+  assert.equal(s.details.boardConfiguration,'');
+  assert.equal(s.details.masterBoardLabel,'');
+  assert.equal(s.details.slaveBoardLabels,'');
+  assert.equal(s.details.configurationNotes,'');
+  assert.equal(nextStep(s),'identify');
+  assert.equal(nextStep({...s,step:'identify'}),null);
+  assert.equal(nextStep({...s,step:'identify',details:{...s.details,boardConfiguration:'individual-wires'}}),'power');
   assert.equal(nextStep({...s,step:'power'}),'connect');
+});
+
+test('identification needs an explicit recognised choice and allows mixed or uncertain setups',()=>{
+  assert.deepEqual(BOARD_CONFIGURATIONS.map(option=>option.id),['flat-input-sense','individual-wires','mixed','unsure']);
+  for(const boardConfiguration of BOARD_CONFIGURATIONS.map(option=>option.id)){
+    const s={...freshSession(),step:'identify'};s.details.boardConfiguration=boardConfiguration;
+    assert.equal(validateStep(s),true);
+    assert.equal(nextStep(s),'power');
+  }
+  for(const boardConfiguration of ['',undefined,null,'new firmware','C']){
+    const s={...freshSession(),step:'identify'};s.details.boardConfiguration=boardConfiguration;
+    assert.equal(validateStep(s),false);
+    assert.equal(nextStep(s),null);
+  }
+});
+
+test('reports preserve operator identification without deriving firmware or changing communication findings',()=>{
+  const s=freshSession();s.initial=replies();
+  const before=outcome(s);
+  Object.assign(s.details,{boardConfiguration:'mixed',masterBoardLabel:'C label as printed',slaveBoardLabels:'A: label one; E: label two',configurationNotes:'Different connections on the end banks.'});
+  const text=report(s,{savedAt:'2026-11-18T10:00:00.000Z'});
+  assert.match(text,/BOARD CONFIGURATION\nOperator-observed setup: Mixed configurations across the banks/);
+  assert.match(text,/Master board label: C label as printed/);
+  assert.match(text,/Slave board labels: A: label one; E: label two/);
+  assert.match(text,/Configuration notes: Different connections on the end banks\./);
+  assert.deepEqual(outcome(s),before);
+  assert.doesNotMatch(text,/Firmware:/);
+  s.details={location:'',technician:'',notes:''};
+  const old=report(s);
+  assert.match(old,/Operator-observed setup: Not recorded/);
+  assert.match(old,/Master board label: Not recorded/);
+  assert.match(old,/Slave board labels: Not recorded/);
+  assert.match(old,/Configuration notes: Not recorded/);
 });
 function comparison(a='responded', b='no-response') {
   return {

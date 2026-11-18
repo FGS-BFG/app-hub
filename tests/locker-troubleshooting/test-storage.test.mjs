@@ -70,6 +70,26 @@ test('enumerates independent meaningful drafts and ignores blank drafts without 
   unchanged(storage, before);
 });
 
+test('identification-step drafts and their history remain recoverable with operator metadata',()=>{
+  const identified=draft();identified.step='identify';identified.history=['welcome','identify','power'];
+  Object.assign(identified.details,{boardConfiguration:'mixed',masterBoardLabel:'Printed C label',slaveBoardLabels:'A and E differ',configurationNotes:'Observed sensor connections only.'});
+  const storage=new MemoryStorage({[draftKey(one)]:json(identified)});
+  const before=[...storage.items],result=readRecoverableTests(storage);
+  assert.equal(result.unreadable,false);assert.equal(result.entries.length,1);
+  assert.deepEqual(result.entries[0].draft.details,identified.details);
+  unchanged(storage,before);
+});
+
+test('invalid optional identification fields do not delete the stored evidence',()=>{
+  for(const [field,value] of Object.entries({boardConfiguration:[],masterBoardLabel:'x'.repeat(161),slaveBoardLabels:'x'.repeat(501),configurationNotes:'x'.repeat(2001)})){
+    const invalid=draft();invalid.details[field]=value;
+    const storage=new MemoryStorage({[draftKey(one)]:json(invalid)}),before=[...storage.items];
+    const result=readRecoverableTests(storage);
+    assert.equal(result.unreadable,true);assert.equal(result.entries.length,0);
+    unchanged(storage,before);
+  }
+});
+
 test('discovers legacy singleton drafts and frozen pending reports without migrating or deleting them', () => {
   const pending = record(two, later);
   const storage = new MemoryStorage({

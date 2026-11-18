@@ -106,6 +106,9 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
   }
   const setTimer=callback=>{const id=timerId++;timers.set(id,callback);return id;};
   const context=vm.createContext({...flow,...records,...driveHelpers,...storageHelpers,
+    // Production ESM modules share a realm. Normalize the VM/host boundary here
+    // so its plain step-log objects reach the real validator as plain objects.
+    createReportRecord:(session,options)=>records.createReportRecord(structuredClone(session),options),
     DriveReportClient,GuidedConnection,mountUsbPanel,shouldProceed:snapshot=>snapshot.phase==='ready',
     FIELD_REPORTS:{endpoint:'https://script.google.com/macros/s/TEST/exec'},
     document,window,localStorage:storage,crypto:{randomUUID(){calls.uuid++;return uuid();}},
@@ -127,6 +130,7 @@ function boot(storage=new MemoryStorage(),{usbConnected=false,driveFailure='Unex
       for(let i=0;i<8;i++){await Promise.resolve();flush();}
     },
     input(field,value){const element=document.querySelectorAll('[data-detail]').find(x=>x.dataset.detail===field);assert.ok(element,'actual welcome input exists: '+field);element.value=value;element.dispatch('input');flush();},
+    chooseConfiguration(value){const element=document.querySelectorAll('[data-board-configuration]').find(x=>x.dataset.boardConfiguration===value);assert.ok(element,'actual board configuration option exists: '+value);element.click();flush();},
     click(id){const element=document.querySelector('#'+id);assert.ok(element,'actual UI control exists: '+id);element.click();flush();},
   };
 }
@@ -138,7 +142,7 @@ function noAutomaticIO(app){
 function freshWelcome(app,oldIds=[]){
   const state=app.state();
   assert.equal(state.step,'welcome');assert.equal(state.mode,'live');
-  assert.deepEqual(state.details,{location:'',technician:'',notes:''});
+  assert.deepEqual(state.details,{location:'',technician:'',notes:'',boardConfiguration:'',masterBoardLabel:'',slaveBoardLabels:'',configurationNotes:''});
   assert.deepEqual(state.initial,{});assert.deepEqual(state.recheck,{});
   assert.deepEqual(state.history,[]);assert.deepEqual(state.log,[]);
   assert.equal(state.pending,null);assert.equal(state.saved,null);assert.equal(state.recovery,null);
@@ -153,10 +157,10 @@ function freshWelcome(app,oldIds=[]){
 function archivedFixtures(step='initial'){
   const legacy=storageHelpers.STORAGE_PREFIX;
   const draft={...flow.freshSession(),reportId:uuid(),step,mode:'usb',connection:'connected',
-    details:{location:'Previous site',technician:'Previous operator',notes:'Original notes'},
+    details:{...flow.freshSession().details,location:'Previous site',technician:'Previous operator',notes:'Original notes'},
     initial:{A:'responded'},usb:{connected:true,events:[{type:'tx',raw:'ISB#A\r'}]},
   };
-  const pendingSession={...flow.freshSession(),details:{location:'Frozen site',technician:'Archived operator',notes:'Frozen observations'}};
+  const pendingSession={...flow.freshSession(),details:{...flow.freshSession().details,location:'Frozen site',technician:'Archived operator',notes:'Frozen observations'}};
   const pending=records.createReportRecord(pendingSession,{id:uuid(),savedAt:'2026-11-18T08:00:00.000Z'});
   const saved=records.createReportRecord(pendingSession,{id:uuid(),savedAt:'2026-11-18T08:01:00.000Z'});
   const receipt={fileId:'test_saved_file_123456789',url:'https://drive.google.com/file/d/test_saved_file_123456789/view',reportId:saved.id};
@@ -190,7 +194,7 @@ test('legacy live, frozen and saved records never choose the startup screen or r
 test('reload creates a fresh test while preserving the previous per-ID draft unchanged',()=>{
   const storage=new MemoryStorage(),previous=boot(storage);
   previous.input('location','Test before reload');previous.input('technician','Operator before reload');
-  previous.click('next');assert.equal(previous.state().step,'power');
+  previous.click('next');assert.equal(previous.state().step,'identify');
   const previousId=previous.state().id,key=storageHelpers.draftKey(previousId),raw=storage.getItem(key);
   assert.ok(raw);
   const reopened=boot(storage);
@@ -312,4 +316,39 @@ test('a validated saved marker from another window forks the live ID while inval
   const newDraft=JSON.parse(storage.getItem(storageHelpers.draftKey(after.id)));
   assert.deepEqual(newDraft.details,before.details);assert.equal(newDraft.step,before.step);
   noAutomaticIO(app);
+});
+
+test('board identification gates the power step and preserves labels through a frozen report and explicit recovery',async()=>{
+  const storage=new MemoryStorage(),app=boot(storage,{driveFailure:'Simulated Drive rejection'});
+  app.input('location','Configuration test site');app.input('technician','Configuration operator');
+  app.click('next');
+  assert.equal(app.state().step,'identify');
+  assert.equal(app.document.querySelector('#next').disabled,true);
+  app.click('next');assert.equal(app.state().step,'identify');
+  assert.deepEqual(app.document.querySelectorAll('[data-board-configuration]').map(x=>x.dataset.boardConfiguration).sort(),
+    ['flat-input-sense','individual-wires','mixed','unsure'].sort());
+  noAutomaticIO(app);
+  app.chooseConfiguration('flat-input-sense');
+  assert.equal(app.state().details.boardConfiguration,'flat-input-sense');
+  assert.equal(app.document.querySelector('#next').disabled,false);
+  app.chooseConfiguration('individual-wires');
+  const identification={boardConfiguration:'individual-wires',masterBoardLabel:'Master C label 304-C',
+    slaveBoardLabels:'A/B/D/E: 304 slave labels',configurationNotes:'Individual blue sensor wires observed on all banks.'};
+  for(const key of ['masterBoardLabel','slaveBoardLabels','configurationNotes'])app.input(key,identification[key]);
+  app.click('next');assert.equal(app.state().step,'power');
+  for(const[key,value]of Object.entries(identification))assert.equal(app.state().details[key],value);
+  noAutomaticIO(app);
+  app.click('save-report');await app.settle();
+  assert.equal(app.state().mode,'pending');assert.equal(app.calls.driveSave,1);
+  const frozen=app.state().pending;
+  for(const[key,value]of Object.entries(identification))assert.equal(frozen.session.details[key],value);
+  const pendingRaw=storage.getItem(storageHelpers.pendingKey(frozen.id));assert.ok(pendingRaw);
+  const reopened=boot(storage);freshWelcome(reopened,[frozen.id]);
+  assert.equal(storage.getItem(storageHelpers.pendingKey(frozen.id)),pendingRaw);
+  reopened.click('recover-reports');
+  assert.equal(reopened.recoveries().find(item=>item.id===frozen.id)?.kind,'pending');
+  await reopened.openRecovery(frozen.id);
+  assert.deepEqual(reopened.state().pending,frozen);
+  for(const[key,value]of Object.entries(identification))assert.equal(reopened.state().pending.session.details[key],value);
+  noAutomaticIO(reopened);
 });

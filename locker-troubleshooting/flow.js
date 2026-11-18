@@ -1,8 +1,14 @@
 export const BOARDS = ['A', 'B', 'C', 'D', 'E'];
 export const STAGES = ['Prepare the system', 'Check every board', 'Isolate the fault', 'Save the result'];
 export const STATES = ['responded', 'no-response'];
+export const BOARD_CONFIGURATIONS = Object.freeze([
+  Object.freeze({id:'flat-input-sense',label:'Flat Input Sense ribbon connections'}),
+  Object.freeze({id:'individual-wires',label:'Individual sensor wires'}),
+  Object.freeze({id:'mixed',label:'Mixed configurations across the banks'}),
+  Object.freeze({id:'unsure',label:'Not sure'}),
+]);
 export function freshSession() {
-  return {version:1, step:'welcome', details:{location:'', technician:'', notes:''}, connection:'', connectionIssue:false, initial:{}, recheck:{}, selftest:'', affected:'', neighbor:'', swapped:{}, cable:'', acknowledged:false, history:[], log:[], started:new Date().toISOString()};
+  return {version:1, step:'welcome', details:{location:'', technician:'', notes:'', boardConfiguration:'', masterBoardLabel:'', slaveBoardLabels:'', configurationNotes:''}, connection:'', connectionIssue:false, initial:{}, recheck:{}, selftest:'', affected:'', neighbor:'', swapped:{}, cable:'', acknowledged:false, history:[], log:[], started:new Date().toISOString()};
 }
 export function allChecked(results, boards=BOARDS) { return boards.every(b=>STATES.includes(results[b])); }
 export function allResponded(results) { return BOARDS.every(b=>results[b]==='responded'); }
@@ -21,6 +27,7 @@ export function swapFinding(s) {
   return 'both-failed';
 }
 export function validateStep(s) {
+  if(s.step==='identify') return BOARD_CONFIGURATIONS.some(option=>option.id===s.details?.boardConfiguration);
   if(s.step==='retry'&&s.connection==='unavailable') return false;
   if(s.step==='initial') return allChecked(s.initial);
   if(s.step==='recheck') return allChecked(s.recheck);
@@ -34,7 +41,7 @@ export function validateStep(s) {
 export function nextStep(s) {
   if(!validateStep(s)) return null;
   if(s.step==='connect'&&s.connection==='unavailable') return 'selftest';
-  const seq={welcome:'power',power:'connect',startup:'connect',connect:'reset',reset:'initial',selftest:'retry',retry:'recheck',select:'connector',connector:'swap'};
+  const seq={welcome:'identify',identify:'power',power:'connect',startup:'connect',connect:'reset',reset:'initial',selftest:'retry',retry:'recheck',select:'connector',connector:'swap'};
   if(seq[s.step]) return seq[s.step];
   if(s.step==='initial') return allResponded(s.initial)?'result':'selftest';
   if(s.step==='recheck') return allResponded(s.recheck)||s.recheck.C!=='responded'?'result':'select';
@@ -60,7 +67,11 @@ export function outcome(s) {
 }
 export function report(s, {savedAt = new Date().toISOString()} = {}) {
   const result=outcome(s), results=r=>BOARDS.map(b=>`  ${b}${b==='C'?' (master)':''}: ${r[b]??'not checked'}`).join('\n');
-  return `MCI 304 LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${savedAt}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nUSB COM CONNECTION\n${s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded')}\n${s.connectionIssue?'A connection problem was recorded during this session.\n':''}\nINITIAL ISB CHECK\n${results(s.initial)}\n\nSELF-TEST\n${s.selftest||'Not performed'}\n\nISB CHECK AFTER RST#C\n${results(s.recheck)}\n\nCONNECTION COMPARISON\nOriginal affected board: ${s.affected||'Not selected'}\nAdjacent working slave: ${s.neighbor||'Not selected'}\nAfter swap: ${s.affected||'?'} ${s.swapped[s.affected]||'not checked'}; ${s.neighbor||'?'} ${s.swapped[s.neighbor]||'not checked'}\nKnown working cable on same hub connection: ${s.cable||'Not checked'}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(e=>`${e.at} | ${e.label}`).join('\n')}\n\n${s.mode==='usb'?'USB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator.':'Commands were sent manually in the test application. Results above were recorded by the operator.'} Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s):''}`;
+  const observed=value=>typeof value==='string'&&value.trim()?value:'Not recorded';
+  const selected=BOARD_CONFIGURATIONS.find(option=>option.id===s.details.boardConfiguration);
+  const configuration=selected?.label||(s.details.boardConfiguration?`Unrecognised selection: ${s.details.boardConfiguration}`:'Not recorded');
+  const boardConfiguration=`BOARD CONFIGURATION\nOperator-observed setup: ${configuration}\nMaster board label: ${observed(s.details.masterBoardLabel)}\nSlave board labels: ${observed(s.details.slaveBoardLabels)}\nConfiguration notes: ${observed(s.details.configurationNotes)}`;
+  return `MCI 304 LOCKER FIELD GUIDE\nMCI 304 troubleshooting session\n\nLocation: ${s.details.location||'Not entered'}\nTechnician: ${s.details.technician||'Not entered'}\nStarted: ${s.started}\nSaved: ${savedAt}\n\n${boardConfiguration}\n\nRESULT\n${result.title}\n${result.summary}\n${result.next}\n\nUSB COM CONNECTION\n${s.mode==='usb'?(s.usb?.connected?'Port open':'Port closed; completed checks remain historical observations'):(s.connection==='connected'?'Connected':s.connection==='unavailable'?'Unavailable':'Not recorded')}\n${s.connectionIssue?'A connection problem was recorded during this session.\n':''}\nINITIAL ISB CHECK\n${results(s.initial)}\n\nSELF-TEST\n${s.selftest||'Not performed'}\n\nISB CHECK AFTER RST#C\n${results(s.recheck)}\n\nCONNECTION COMPARISON\nOriginal affected board: ${s.affected||'Not selected'}\nAdjacent working slave: ${s.neighbor||'Not selected'}\nAfter swap: ${s.affected||'?'} ${s.swapped[s.affected]||'not checked'}; ${s.neighbor||'?'} ${s.swapped[s.neighbor]||'not checked'}\nKnown working cable on same hub connection: ${s.cable||'Not checked'}\n\nNOTES\n${s.details.notes||'None'}\n\nSTEP RECORD\n${s.log.map(e=>`${e.at} | ${e.label}`).join('\n')}\n\n${s.mode==='usb'?'USB checks are recorded automatically by this browser. Physical actions and self-test observations are recorded by the operator.':'Commands were sent manually in the test application. Results above were recorded by the operator.'} Possible causes are not confirmed component diagnoses.\n${s.mode==='usb'?usbEvidence(s):''}`;
 }
 function usbEvidence(s){
  const data=s.usb||{};

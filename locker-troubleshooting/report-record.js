@@ -1,4 +1,4 @@
-import {outcome, report} from './flow.js';
+import {outcome, report} from './flow.js?v=20261118-identify';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fields = ['id', 'savedAt', 'title', 'location', 'technician', 'reportText'];
@@ -59,6 +59,10 @@ function validateSession(session) {
   }
   for (const key of ['location', 'technician', 'notes']) {
     if (typeof session.details[key] !== 'string') invalid('session.details.' + key + ' must be text.');
+  }
+  for (const [key,limit] of Object.entries({boardConfiguration:80,masterBoardLabel:160,slaveBoardLabels:500,configurationNotes:2000})) {
+    const value=session.details[key];
+    if (value!==undefined&&(typeof value!=='string'||value.length>limit)) invalid('session.details.'+key+' must be text of at most '+limit+' characters.');
   }
   if (!Array.isArray(session.log) || !Array.isArray(session.history)) invalid('session records must be arrays.');
   if (typeof session.started !== 'string' || !Number.isFinite(Date.parse(session.started))) {
@@ -130,7 +134,7 @@ function hasEntries(value) {
 
 export function hasReportData(session) {
   if (!isObject(session)) return false;
-  if (['location', 'technician', 'notes', 'title'].some(key => hasText(session.details?.[key]))) return true;
+  if (['location', 'technician', 'notes', 'title', 'boardConfiguration', 'masterBoardLabel', 'slaveBoardLabels', 'configurationNotes'].some(key => hasText(session.details?.[key]))) return true;
   if (['connection', 'selftest', 'affected', 'neighbor', 'cable', 'title'].some(key => hasText(session[key]))) return true;
   if (session.connectionIssue === true || session.acknowledged === true) return true;
   if (['initial', 'recheck', 'swapped', 'checkErrors'].some(key =>

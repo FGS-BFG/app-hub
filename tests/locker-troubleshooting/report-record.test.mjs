@@ -41,6 +41,42 @@ test('a saved report captures metadata, the complete session and one stable time
   assert.notEqual(record.session, session);
 });
 
+test('board identification is frozen in the report text uploaded to Drive',()=>{
+  const session=recordedSession();
+  Object.assign(session.details,{boardConfiguration:'individual-wires',masterBoardLabel:'Printed master label',slaveBoardLabels:'A: printed A label',configurationNotes:'Observed individual sensor connections.'});
+  const record=createReportRecord(session,options);
+  const payload=payloadForDrive(roundTrip(record));
+  session.details.boardConfiguration='flat-input-sense';session.details.masterBoardLabel='Changed live value';
+  assert.equal(record.session.details.boardConfiguration,'individual-wires');
+  assert.match(payload.reportText,/Operator-observed setup: Individual sensor wires/);
+  assert.match(payload.reportText,/Master board label: Printed master label/);
+  assert.match(payload.reportText,/Slave board labels: A: printed A label/);
+  assert.match(payload.reportText,/Configuration notes: Observed individual sensor connections\./);
+  assert.doesNotMatch(payload.reportText,/Changed live value/);
+  assert.equal(payloadForDrive(roundTrip(record)).reportText,payload.reportText);
+});
+
+test('identification alone is meaningful draft data and optional fields retain their size limits',()=>{
+  for(const [field,value] of Object.entries({boardConfiguration:'unsure',masterBoardLabel:'MCI label',slaveBoardLabels:'A: label',configurationNotes:'Could not read the label.'})){
+    const session=freshSession();session.details[field]=value;
+    assert.equal(hasReportData(session),true,field);
+    assert.doesNotThrow(()=>createReportRecord(session,options));
+  }
+  for(const [field,limit] of Object.entries({boardConfiguration:80,masterBoardLabel:160,slaveBoardLabels:500,configurationNotes:2000})){
+    const session=freshSession();session.details[field]='x'.repeat(limit+1);
+    assert.throws(()=>createReportRecord(session,options),/must be text of at most/);
+    session.details[field]={unexpected:'object'};
+    assert.throws(()=>createReportRecord(session,options),/must be text of at most/);
+  }
+});
+
+test('older frozen reports with no board-identification fields keep their original retry text',()=>{
+  const old=roundTrip(createReportRecord(recordedSession(),options));
+  old.reportText='Original frozen report text from before board identification existed.';
+  assert.equal(Object.hasOwn(old.session.details,'boardConfiguration'),false);
+  assert.equal(payloadForDrive(old).reportText,old.reportText);
+});
+
 test('saving neither freezes nor changes the live session, and later changes cannot alter the record', () => {
   const session = recordedSession();
   const original = roundTrip(session);

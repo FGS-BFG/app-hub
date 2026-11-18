@@ -1,17 +1,21 @@
-import {BOARDS,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261117-drive';
+import {BOARDS,BOARD_CONFIGURATIONS,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-identify';
 import {mountUsbPanel} from './usb-ui.js?v=20261117-drive';
 import {GuidedConnection,shouldProceed} from './guided-connection.js?v=20261117-drive';
-import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js';
+import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-identify';
 import {DriveReportClient,buildReportPayload,validateSaveResult} from './drive-reports.js';
 import {FIELD_REPORTS} from './drive-config.js';
-import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js';
+import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-identify';
 
 const drive=new DriveReportClient({endpoint:FIELD_REPORTS.endpoint});
 let checksPaused=false;
 let reportMode='live',pendingRecord=null,savedRecord=null,savedReceipt=null,reportError='',cacheError='';
 let recoveryContext=null,recoveryEntries=[];
 const volatilePending=new Map();
-const stages={welcome:0,power:0,startup:0,connect:0,reset:0,initial:1,selftest:1,retry:2,recheck:2,select:2,connector:2,swap:2,cable:2,result:3};
+const stages={welcome:0,identify:0,power:0,startup:0,connect:0,reset:0,initial:1,selftest:1,retry:2,recheck:2,select:2,connector:2,swap:2,cable:2,result:3};
+const PHOTO_SETUPS={
+ 'flat-input-sense':{label:'Flat Input Sense ribbons',master:'assets/master.png',slave:'assets/slave.png'},
+ 'individual-wires':{label:'Individual sensor wires',master:'assets/master-wired-reference.jpg',slave:'assets/slave-wired-reference.jpg'}
+};
 const $=q=>document.querySelector(q);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // A page opening is always a new physical test. Older browser records are
@@ -19,6 +23,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 let s=freshSession(),usb,connection;
 s.reportId=crypto.randomUUID();
 let entry=0,attempted=-1,checking=false,resetComplete=-1,physicalDone=false,readingBoard='',photo='master';
+let photoSetup='flat-input-sense';
 let selftestDeadline=0,selftestTimer=null,advancePending=false;
 const snapshot=()=>connection?.snapshot()||{phase:'waiting',remainingSeconds:60};
 function cacheSet(key,value){try{const text=JSON.stringify(value);localStorage.setItem(key,text);if(localStorage.getItem(key)!==text)throw Error('The browser did not retain the report.');return true;}catch{cacheError='This browser cannot keep a local retry copy. Keep this page open and download a copy. Saving to Google Drive can still be attempted.';return false;}}
@@ -43,6 +48,11 @@ function connectButton(){return `<button class="primary" id="guide-connect" ${us
 function reconnect(){return !usb.connected?`<div class="guide-status attention"><div><strong>The USB port is disconnected.</strong><p>Connect the black USB cable. Close the other locker applications, then choose the locker port.</p>${connectButton()}</div></div>`:'';}
 function problemExit(){return Object.keys(s.checkErrors||{}).length||!usb.connected?`<div class="guide-help">${Object.keys(s.checkErrors||{}).length?'<p>This check is incomplete. A USB error or unexpected reply does not identify a faulty board.</p>':''}<button class="secondary" id="retry-step" ${usb.connected&&idle()?'':'disabled'}>Try this check again</button><button class="text-button" id="finish-incomplete" ${idle()?'':'disabled'}>Save the incomplete result for support</button></div>`:'';}
 function boardResults(field,boards=BOARDS){const values=field==='cable'?{[s.neighbor]:s.cable}:s[field];return `<div class="guided-board-results" aria-label="Automatic board checks">${boards.map(b=>{const state=values[b];const text=state==='responded'?'Reply received':state==='no-response'?'No reply before the timeout':s.checkErrors?.[b]?'Check incomplete':checking&&readingBoard===b?'Checking now…':'Waiting for this check';return `<div class="guided-board-row ${state==='responded'?'pass':state==='no-response'||s.checkErrors?.[b]?'fail':''}"><b>${b}</b><div><strong>${b==='C'?'Master C':'Board '+b}</strong><span>${esc(text)}</span></div><span aria-hidden="true">${state==='responded'?'✓':checking&&readingBoard===b?'…':'·'}</span></div>`;}).join('')}</div>`;}
+function identificationContent(){
+ const selected=s.details.boardConfiguration;
+ const photoChoices=BOARD_CONFIGURATIONS.filter(option=>PHOTO_SETUPS[option.id]);
+ return `<h1>Identify the board setup.</h1><p class="lede">Compare the sensor connections on the master and slave boards with these photos.</p><p>Choose the setup that matches the installed boards. Enlarge a photo if you need a closer look.</p><fieldset class="setup-fieldset"><legend>Which setup is fitted?</legend><div class="setup-grid">${photoChoices.map(option=>`<article class="setup-card ${selected===option.id?'selected':''}"><button class="setup-pick" data-board-configuration="${option.id}" aria-pressed="${selected===option.id}"><span class="setup-check" aria-hidden="true">${selected===option.id?'✓':'○'}</span><strong>${esc(PHOTO_SETUPS[option.id].label)}</strong><span>${option.id==='flat-input-sense'?'Flat orange Input Sense cables plug into the front headers.':'Individual sensor wires plug into the front headers; the examples use blue wires.'}</span></button><div class="setup-images">${['master','slave'].map(role=>`<button class="setup-photo ${option.id==='individual-wires'?'wired':''}" data-preview-configuration="${option.id}" data-preview-board="${role}" aria-label="Enlarge ${role} photograph: ${esc(PHOTO_SETUPS[option.id].label)}"><img src="${PHOTO_SETUPS[option.id][role]}" alt="${role==='master'?'Master':'Slave'} example with ${option.id==='flat-input-sense'?'flat Input Sense ribbons':'individual blue sensor wires'}" loading="lazy"><span>${role==='master'?'Master':'Slave'} <span aria-hidden="true">⤢</span></span></button>`).join('')}</div></article>`).join('')}</div><div class="choices setup-other">${BOARD_CONFIGURATIONS.filter(option=>!PHOTO_SETUPS[option.id]).map(option=>`<button class="choice ${selected===option.id?'selected':''}" data-board-configuration="${option.id}" aria-pressed="${selected===option.id}">${esc(option.label)}</button>`).join('')}</div></fieldset><p class="setup-help">The master has the USB connection to the PC. If the banks use different sensor connections, select Mixed and record the bank letters below.</p><div class="fields board-labels"><label class="field">Master board label <span class="optional">optional</span><input data-detail="masterBoardLabel" maxlength="160" value="${esc(s.details.masterBoardLabel)}" placeholder="Copy the printed board or firmware label"></label><label class="field">Slave board label(s) <span class="optional">optional</span><input data-detail="slaveBoardLabels" maxlength="500" value="${esc(s.details.slaveBoardLabels)}" placeholder="Include bank letters if labels differ"></label></div><label class="field notes-label">Configuration notes <span class="optional">optional</span><textarea data-detail="configurationNotes" maxlength="2000" placeholder="Record differences between banks or anything that does not match the photos.">${esc(s.details.configurationNotes)}</textarea></label>${note('Copy labels from the boards in front of you. The labels in the reference photos are examples. This guide checks A, B, C, D and E, with C as the master.')}${actions()}`;
+}
 function connectionContent(){
  if(checksPaused)return `<h1>The connection check is paused.</h1><p class="lede">Your report is unchanged. When you are ready, restart the 60-second connection check before continuing.</p><button class="primary" id="retry-connection">Check the connection again</button>${actions()}`;
  const c=snapshot();
@@ -55,7 +65,8 @@ function connectionContent(){
  return `<h1>${c.phase==='ready'?'The connection is ready.':'Connect the black USB cable.'}</h1><p class="lede">Connect master C to this computer. Select the locker COM port when the browser asks.</p>${status}${['watching','waiting'].includes(c.phase)?`<div class="guide-countdown" role="progressbar" aria-label="${c.phase==='watching'?'Connection stability check':'Connection wait'}" aria-valuemin="0" aria-valuemax="60" aria-valuenow="${Math.max(0,60-c.remainingSeconds)}"><span style="width:${Math.max(0,Math.min(100,(60-c.remainingSeconds)/60*100))}%"></span></div>`:''}${!usb.connected?connectButton():''}${c.phase==='attention'?`<div class="guide-help"><button class="primary" id="retry-connection" ${idle()?'':'disabled'}>Check the connection again</button>${usb.connected?'<button class="secondary" id="disconnect-guide">Choose a different USB port</button>':''}<button class="text-button" id="connection-unavailable" ${idle()?'':'disabled'}>I cannot connect · run the physical self-test</button></div>`:''}${actions()}`;
 }
 function content(){switch(s.step){
- case 'welcome':return `<div class="intro-mark" aria-hidden="true">▦</div><h1>Let’s check the lockers.<br>One step at a time.</h1><p class="lede">We will tell you what to do and check the board replies automatically.</p><p>Start with the mains supply. Then connect the USB cable when the guide asks.</p><div class="fields welcome-details"><label class="field">Location <span class="optional">optional</span><input data-detail="location" maxlength="100" value="${esc(s.details.location)}"></label><label class="field">Your name <span class="optional">optional</span><input data-detail="technician" maxlength="100" value="${esc(s.details.technician)}"></label></div>${actions()}`;
+ case 'welcome':return `<div class="intro-mark" aria-hidden="true">▦</div><h1>Let’s check the lockers.<br>One step at a time.</h1><p class="lede">We will tell you what to do and check the board replies automatically.</p><p>Enter the location and your name. Next, identify the boards before the power and USB checks.</p><div class="fields welcome-details"><label class="field">Location <span class="optional">optional</span><input data-detail="location" maxlength="100" value="${esc(s.details.location)}"></label><label class="field">Your name <span class="optional">optional</span><input data-detail="technician" maxlength="100" value="${esc(s.details.technician)}"></label></div>${actions()}`;
+ case 'identify':return identificationContent();
  case 'power':case 'startup':return `<h1>Turn the locker power off.<br>Then turn it back on.</h1><ol class="physical-steps"><li>Switch off the mains supply to the locker system.</li><li>Switch it back on.</li><li>Wait for the system to finish starting.</li></ol>${note('Restarting the PC alone does not cycle the locker mains supply.')}<p>When the system is back on, select Next. We will connect the USB cable next.</p>${actions()}`;
  case 'connect':return connectionContent();
  case 'reset':case 'retry':return `<h1>${resetComplete===entry?'The reset command has been sent.':'We will reset master C.'}</h1><p class="lede">Keep the USB cable connected. We send the reset command to C only.</p>${reconnect()}${checking?waiting('Resetting master C…','Wait for the master’s five-second reset sequence. You do not need to type a command.'):resetComplete===entry?success('The reset wait is complete.','Select Next. We will check all five boards automatically.'):usb.connected?waiting('Preparing the reset…','The guide will send RST to master C.'):''}${note('A reset sent to a slave does not perform a meaningful system reset. The board checks verify communication after the master reset.')}${problemExit()}${actions()}`;
@@ -70,7 +81,7 @@ function content(){switch(s.step){
 function render(focus=false){
  if(reportMode!=='live'){renderReportView(focus);return;}
  const stage=stages[s.step];$('#stage-label').textContent=STAGES[stage];$('#guide-usb-status').textContent=usb?.connected?'USB port open':'USB not connected';
- $('#progress').innerHTML=STAGES.map((text,i)=>`<li class="${i===stage?'active':i<stage?'done':''}" ${i===stage?'aria-current="step"':''}><span class="progress-num">${i<stage?'✓':i+1}</span><div>${text}<small>${['Power, USB and master reset','Automatic board replies','Follow the next physical test','Save the evidence to Drive'][i]}</small></div></li>`).join('');
+ $('#progress').innerHTML=STAGES.map((text,i)=>`<li class="${i===stage?'active':i<stage?'done':''}" ${i===stage?'aria-current="step"':''}><span class="progress-num">${i<stage?'✓':i+1}</span><div>${text}<small>${['Board setup, power and USB','Automatic board replies','Follow the next physical test','Save the evidence to Drive'][i]}</small></div></li>`).join('');
  $('#step').innerHTML=`<div class="eyebrow"><span class="mini-dot"></span>${stage===3?'YOUR RESULT':STAGES[stage]}</div>${content()}`;
  usb?.setControlsEnabled(s.step==='result'&&!checksPaused);refreshReportControls();$('#advanced-diagnostics').hidden=false;
  $('#storage-label').textContent=cacheError?'Browser progress could not be saved':'Draft kept on this device';
@@ -78,6 +89,8 @@ function render(focus=false){
  $('#resume-report')?.addEventListener('click',resumeReport);
  if(reportError||cacheError)$('#step').insertAdjacentHTML('afterbegin',`<p class="report-error" role="alert">${esc(reportError||cacheError)}</p>`);
  $('#next')?.addEventListener('click',next);
+ document.querySelectorAll('[data-board-configuration]').forEach(el=>el.addEventListener('click',()=>{if(!idle()||s.step!=='identify')return;s.details.boardConfiguration=el.dataset.boardConfiguration;save();setContextPhoto();render();}));
+ document.querySelectorAll('[data-preview-configuration]').forEach(el=>el.addEventListener('click',()=>showBoardPhoto(el.dataset.previewConfiguration,el.dataset.previewBoard)));
  $('#back')?.addEventListener('click',()=>{if(!idle())return;const previous=s.history.pop();if(previous){connection.stop();usb.stopMonitor();s.step=previous;entry++;attempted=-1;resetComplete=-1;physicalDone=false;save();setContextPhoto();render(true);enterStep();}});
  $('#guide-connect')?.addEventListener('click',()=>{if(idle())usb.connect();});
  $('#retry-connection')?.addEventListener('click',()=>{if(!idle())return;checksPaused=false;record('Operator requested a new connection check');connection.retry();connection.notifyConnection(usb.connected);});
@@ -107,7 +120,7 @@ async function runChecks(field,boards){
  s.checkErrors||={};delete s.checkErrors.USB;for(const b of boards){delete s.checkErrors[b];if(field==='cable')s.cable='';else delete s[field][b];}readingBoard=boards[0];record(`Starting automatic USB ${field} check: ${boards.join(', ')}`);render();
  try{await usb.scan(boards,result=>{if(reportMode!=='live'||entry!==ownEntry)return;if(result.status==='error')s.checkErrors[result.board]=result.error;else{if(field==='cable')s.cable=result.status;else s[field][result.board]=result.status;delete s.checkErrors[result.board];s.connection='connected';}record(`USB ${field} ISB#${result.board}: ${result.status}${result.bits?' (BIN) '+result.bits:''}${result.error?' — '+result.error:''}`);readingBoard=boards[boards.indexOf(result.board)+1]||'';render();});}catch(e){s.checkErrors.USB=e.message;record('Automatic USB check incomplete: '+e.message);}finally{checking=false;readingBoard='';save();render();}
 }
-function stepRecord(){if(['initial','recheck'].includes(s.step))return s.step+' board checks reviewed';if(s.step==='selftest')return 'Operator self-test observation: '+s.selftest;if(s.step==='select')return `Comparison selected: ${s.affected} and working slave ${s.neighbor}`;if(s.step==='connector')return 'Operator acknowledged the D9 alignment instructions by selecting Next';if(s.step==='swap')return `Swap results: ${s.affected} ${s.swapped[s.affected]}; ${s.neighbor} ${s.swapped[s.neighbor]}`;if(s.step==='cable')return 'Replacement cable result: '+s.cable;return s.step+' completed';}
+function stepRecord(){if(s.step==='identify')return 'Operator identified board setup: '+(BOARD_CONFIGURATIONS.find(option=>option.id===s.details.boardConfiguration)?.label||'Not recorded');if(['initial','recheck'].includes(s.step))return s.step+' board checks reviewed';if(s.step==='selftest')return 'Operator self-test observation: '+s.selftest;if(s.step==='select')return `Comparison selected: ${s.affected} and working slave ${s.neighbor}`;if(s.step==='connector')return 'Operator acknowledged the D9 alignment instructions by selecting Next';if(s.step==='swap')return `Swap results: ${s.affected} ${s.swapped[s.affected]}; ${s.neighbor} ${s.swapped[s.neighbor]}`;if(s.step==='cable')return 'Replacement cable result: '+s.cable;return s.step+' completed';}
 async function copy(text,message){try{await navigator.clipboard.writeText(text);toast(message);}catch{toast('Use Download report to save the evidence.');}}
 function download(){downloadText(reportMode==='live'?report(s):(pendingRecord||savedRecord)?.reportText||'');}
 function downloadText(text){if(!text)return;const record=pendingRecord||savedRecord;const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='locker-check-'+(record?.savedAt||new Date().toISOString()).slice(0,10)+'.txt';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Copy downloaded. Drive saving is separate.');}
@@ -163,6 +176,7 @@ function refreshReportControls(){
  $('#save-result')?.toggleAttribute('disabled',changing||busy||!hasReportData(s));
 }
 function renderReportView(focus=false){
+ setContextPhoto();
  const record=pendingRecord||savedRecord;
  const saved=reportMode==='saved',saving=reportMode==='saving',changing=reportMode==='changing';
  const heading=changing?'Starting a new report…':saved?'Saved to Google Drive.':saving?'Save this report to Drive.':'This report is waiting to be saved.';
@@ -228,17 +242,25 @@ async function startFreshReport(){
   await usb?.disconnect();
   usb?.clear();
   const draft=freshSession();draft.mode='usb';draft.reportId=crypto.randomUUID();draft.usb=usb?.snapshot()||{};
-  s=draft;checksPaused=false;pendingRecord=null;savedRecord=null;savedReceipt=null;recoveryContext=null;
+  s=draft;checksPaused=false;pendingRecord=null;savedRecord=null;savedReceipt=null;recoveryContext=null;photoSetup='flat-input-sense';
   reportMode='live';entry++;attempted=-1;resetComplete=-1;physicalDone=false;readingBoard='';setContextPhoto();render(true);enterStep();
   return true;
  }catch(error){reportMode=previousMode;reportError='The new report could not be started: '+(error?.message||String(error));render(true);return false;}
 }
 
 const masterFacts=$('.reference-facts').innerHTML;
-function setPhoto(value){photo=value;document.querySelectorAll('[data-photo]').forEach(el=>el.setAttribute('aria-selected',String(el.dataset.photo===photo)));$('#reference-photo').src=`assets/${photo}.png`;$('#reference-photo').alt=photo==='master'?'Master C connections and the red self-test button in front of the black USB cable':'Slave board communication and sensor connections';$('.reference-facts').innerHTML=photo==='master'?masterFacts:'<div><i class="cable purple"></i><span>Rainbow link</span><strong>Power + UART to C</strong></div><div><i class="cable blue"></i><span>Front connectors</span><strong>Sensor inputs</strong></div>';}
-function setContextPhoto(){setPhoto(['select','connector','swap','cable'].includes(s.step)?'slave':'master');}
+function setPhoto(value){
+ photo=value;const setup=PHOTO_SETUPS[photoSetup];
+ document.querySelectorAll('[data-photo]').forEach(el=>el.setAttribute('aria-selected',String(el.dataset.photo===photo)));
+ $('#reference-setup').value=photoSetup;$('#reference-photo').src=setup[photo];$('#reference-photo').alt=`${photo==='master'?'Master':'Slave'} example: ${setup.label}`;
+ if(photoSetup==='flat-input-sense')$('.reference-facts').innerHTML=photo==='master'?masterFacts:'<div><i class="cable purple"></i><span>Rainbow link</span><strong>Power + UART to C</strong></div><div><i class="cable blue"></i><span>Front connectors</span><strong>Input Sense ribbons</strong></div>';
+ else $('.reference-facts').innerHTML=`<div><i class="cable blue"></i><span>Sensor headers</span><strong>Individual wires</strong></div><div><i class="cable purple"></i><span>Bank communication</span><strong>UART via master C</strong></div>${photo==='master'?'<div><i class="cable blue"></i><span>USB connection</span><strong>Master to PC</strong></div>':''}`;
+}
+function setContextPhoto(){const details=reportMode==='live'?s.details:(pendingRecord||savedRecord)?.session?.details;if(PHOTO_SETUPS[details?.boardConfiguration])photoSetup=details.boardConfiguration;setPhoto(['select','connector','swap','cable'].includes(s.step)?'slave':'master');}
+function showBoardPhoto(setupId,role){const setup=PHOTO_SETUPS[setupId];if(!setup||!['master','slave'].includes(role))return;$('#full-photo').src=setup[role];$('#full-photo').alt=`${role==='master'?'Master':'Slave'} example: ${setup.label}`;$('#photo-title').textContent=`${role==='master'?'Master':'Slave'} · ${setup.label}`;$('#photo-dialog').showModal();}
 document.querySelectorAll('[data-photo]').forEach(el=>el.addEventListener('click',()=>setPhoto(el.dataset.photo)));
-$('#zoom-photo').addEventListener('click',()=>{$('#full-photo').src=`assets/${photo}.png`;$('#full-photo').alt=$('#reference-photo').alt;$('#photo-title').textContent=photo==='master'?'Master C connections':'Slave board connections';$('#photo-dialog').showModal();});
+$('#reference-setup').addEventListener('change',event=>{if(PHOTO_SETUPS[event.target.value]){photoSetup=event.target.value;setPhoto(photo);}});
+$('#zoom-photo').addEventListener('click',()=>showBoardPhoto(photoSetup,photo));
 $('#close-photo').addEventListener('click',()=>$('#photo-dialog').close());
 $('#photo-dialog').addEventListener('click',e=>{if(e.target===$('#photo-dialog'))$('#photo-dialog').close();});
 $('#save-report').addEventListener('click',()=>saveToDrive());
