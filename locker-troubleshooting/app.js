@@ -1,14 +1,14 @@
-import {BEFORE_RESTART_COMMUNICATION,BOARD_CONFIGURATIONS,LOCKER_CAPACITIES,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-detect';
+import {BEFORE_RESTART_COMMUNICATION,BOARD_CONFIGURATIONS,LOCKER_CAPACITIES,STAGES,STATES,freshSession,allChecked,failedBoards,workingNeighbors,validateStep,nextStep,outcome,report} from './flow.js?v=20261118-click-door';
 import {detectedSelection} from './board-detection.js?v=20261118-detect';
-import {mountUsbPanel} from './usb-ui.js?v=20261118-live-doors';
-import {createDoorGuide} from './door-ui.js?v=20261118-live-doors';
-import {freshDoorTests,getDoorTargets,getDoorMaster,hasDoorTestData,doorTestSummary} from './door-test.js?v=20261118-detect';
+import {mountUsbPanel} from './usb-ui.js?v=20261118-click-door';
+import {createDoorGuide} from './door-ui.js?v=20261118-click-door';
+import {freshDoorTests,getDoorTargets,getDoorMaster,hasDoorTestData,doorTestSummary} from './door-test.js?v=20261118-click-door';
 import {boardsFor,masterFor,layoutForCapacity} from './layouts.js?v=20261118-master';
 import {GuidedConnection,shouldProceed} from './guided-connection.js?v=20261118-detect';
-import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-detect';
+import {createReportRecord,payloadForDrive,hasReportData} from './report-record.js?v=20261118-click-door';
 import {DriveReportClient,buildReportPayload,validateSaveResult} from './drive-reports.js';
 import {FIELD_REPORTS} from './drive-config.js';
-import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-detect';
+import {draftKey,pendingKey,savedKey,readRecoverableTests} from './test-storage.js?v=20261118-click-door';
 
 const drive=new DriveReportClient({endpoint:FIELD_REPORTS.endpoint});
 let checksPaused=false;
@@ -64,7 +64,18 @@ function connectButton(){return `<button class="primary" id="guide-connect" ${us
 function reconnect(){return !usb.connected?`<div class="guide-status attention"><div><strong>The USB port is disconnected.</strong><p>Connect the black USB cable. Close the parkIT app, then choose the locker port.</p>${connectButton()}</div></div>`:'';}
 function problemExit(){return Object.keys(s.checkErrors||{}).length||!usb.connected?`<div class="guide-help">${Object.keys(s.checkErrors||{}).length?'<p>This check is incomplete. A USB error or unexpected reply does not identify a faulty board.</p>':''}<button class="secondary" id="retry-step" ${usb.connected&&idle()?'':'disabled'}>Try this check again</button><button class="text-button" id="finish-incomplete" ${idle()?'':'disabled'}>Save the incomplete result for support</button></div>`:'';}
 function boardResults(field,boards=activeBoards()){const values=field==='cable'?{[s.neighbor]:s.cable}:s[field];return `<div class="guided-board-results" aria-label="Automatic board checks">${boards.map(b=>{const state=values[b];const text=state==='responded'?'Reply received':state==='no-response'?'No reply before the timeout':s.checkErrors?.[b]?'Check incomplete':checking&&readingBoard===b?'Checking now…':'Waiting for this check';return `<div class="guided-board-row ${state==='responded'?'pass':state==='no-response'||s.checkErrors?.[b]?'fail':''}"><b>${b}</b><div><strong>${b===activeMaster()?'Master '+activeMaster():'Board '+b}</strong><span>${esc(text)}</span></div><span aria-hidden="true">${state==='responded'?'✓':checking&&readingBoard===b?'…':'·'}</span></div>`;}).join('')}</div>`;}
-function doorResultContent(){const summary=doorTestSummary(s.doorTests);return `<section class="door-result"><h2>Door checks</h2><p>${summary.tested} attempted · ${summary.skipped} not completed · ${summary.pending} pending</p><ul>${testBoards().map(board=>{const item=summary.banks[board];return `<li><strong>${board}${item.door?' · door '+item.door:''}</strong>: ${item.status==='tested'?`operator opened=${esc(item.operatorOpened)}, closed=${esc(item.operatorClosed)}`:item.status==='skipped'?'not completed':'no completed result'}${item.commandIssues.length?' · command issue recorded':''}</li>`;}).join('')}</ul><p>Door observations and sensor readings are recorded separately from the communication result above.</p></section>`;}
+function doorResultContent(){
+ const data=s.doorTests,summary=doorTestSummary(data);
+ const rows=testBoards().flatMap(board=>{
+  const attempts=[...(data.previous?.[board]||[]),data.banks[board]];
+  return attempts.map(item=>{
+   const result=item.status==='tested'?`operator opened=${esc(item.operator.opened)}, closed=${esc(item.operator.closed)}`:item.status==='skipped'?'not completed':'no completed result';
+   const issue=item.command.open&&item.command.open.status!=='sent'||item.command.lockOff&&item.command.lockOff.status!=='sent';
+   return `<li><strong>${board}${item.door?' · door '+item.door:''}</strong>: ${result}${issue?' · command issue recorded':''}</li>`;
+  });
+ });
+ return `<section class="door-result"><h2>Door checks</h2><p>${summary.tested} columns tested · ${summary.skipped} skipped · ${summary.pending} pending</p><ul>${rows.join('')}</ul><p>Door observations and sensor readings are recorded separately from the communication result above.</p></section>`;
+}
 function selftestHelpContent(){
  const setupId=PHOTO_SETUPS[buttonHelpSetup]?buttonHelpSetup:PHOTO_SETUPS[s.details.boardConfiguration]?s.details.boardConfiguration:photoSetup;
  const setup=PHOTO_SETUPS[setupId],wired=setupId==='individual-wires';

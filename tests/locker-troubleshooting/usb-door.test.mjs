@@ -1,4 +1,14 @@
 import test from 'node:test';
+test('fresh sensor checks prevent a release when another door is still open',async()=>{
+ const bits='0'.repeat(15)+'1';
+ const here=await setup({query:(board,count,reading)=>reading(board,board==='A'?bits:undefined)});
+ await assert.rejects(here.panel.openDoorTest('A',2),error=>error.code==='DOOR_OPEN'&&/Close door 1 on column A/.test(error.message));
+ assert.equal(here.calls.pulses.length,0);
+ const other=await setup({query:(board,count,reading)=>reading(board,board==='B'?bits:undefined)});
+ await assert.rejects(other.panel.openDoorTest('A',2,{previousDoors:{B:{door:1,closureUncertain:true}}}),
+  error=>error.code==='DOOR_OPEN'&&/Close door 1 on column B/.test(error.message));
+ assert.equal(other.calls.pulses.length,0);
+});
 test('live diagram reads share the USB lock and leave recorded test evidence alone',async()=>{
  const response=deferred();
  const run=await setup({getBoards:()=>['A','B'],getMaster:()=> 'B',query:()=>response.promise});

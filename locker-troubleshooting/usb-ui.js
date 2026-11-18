@@ -214,7 +214,7 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
   if(!transport?.connected)throw Error('Connect the locker USB port first.');
   operation=true;doorStop=false;lastError='';onBusy(true);paint();return ++token;
  }
- async function openDoorTest(board,door,{shouldContinue=()=>true,onPhase=()=>{},onSample=()=>{},onCommand=()=>{},onLockState=()=>{}}={}){
+ async function openDoorTest(board,door,{shouldContinue=()=>true,onPhase=()=>{},onSample=()=>{},onCommand=()=>{},onLockState=()=>{},previousDoors={}}={}){
   if(!Number.isInteger(door)||door<1||door>16)throw Error('Choose a door from 1 to 16.');
   if(transport?.activationBlocked)throw Error(transport.activationBlockReason||'Lock-off transmission was not confirmed. Stop opening doors and record the incomplete tests.');
   const targets=operationBoards(),master=activeMaster(),mine=beginDoorOperation(board),canContinue=()=>mine===token&&!doorStop&&!document.hidden&&shouldContinue()&&targets.join('')===operationBoards().join('')&&master===activeMaster();
@@ -224,10 +224,22 @@ export function mountUsbPanel(root,{saved={},getBoards=()=>BOARDS,getMaster=()=>
    onPhase('Recording the starting sensor inputs…');
    const first=await read('baseline',board);
    if(first.status!=='responded')throw Object.assign(Error('The selected column did not provide a valid starting reading. No opening command was sent.'),{code:'BASELINE'});
-   for(const value of targets.filter(value=>value!==board)){const result=await read('baseline',value);if(value===master&&result.status!=='responded')throw Object.assign(Error(`Master ${master} did not provide a valid starting reading. No opening command was sent.`),{code:'BASELINE'});}
+   for(const value of targets.filter(value=>value!==board)){
+    const result=await read('baseline',value);
+    if(value===master&&result.status!=='responded')throw Object.assign(Error(`Master ${master} did not provide a valid starting reading. No opening command was sent.`),{code:'BASELINE'});
+    const previous=previousDoors[value];
+    if(previous&&result.status!=='responded'&&previous.closureUncertain){
+     throw Object.assign(Error(`Check that door ${previous.door} on column ${value} is closed and restore its connection before testing another door.`),{code:'BASELINE'});
+    }
+    if(previous&&result.status==='responded'&&result.bits[16-previous.door]==='1'){
+     throw Object.assign(Error(`Close door ${previous.door} on column ${value} before testing another door.`),{code:'DOOR_OPEN'});
+    }
+   }
    const latest=await read('baseline',board);
    if(latest.status!=='responded')throw Object.assign(Error('The selected column stopped replying before opening. No opening command was sent.'),{code:'BASELINE'});
-   if(latest.bits[16-door]!=='0')throw Object.assign(Error('The selected door sensor is not closed (expected 0). Close the door before trying again. No opening command was sent.'),{code:'BASELINE'});
+   if(latest.bits[16-door]!=='0')throw Object.assign(Error(`The selected door sensor is not closed. Close door ${door} on column ${board} before trying again.`),{code:'BASELINE'});
+   const alreadyOpen=Array.from({length:16},(_,index)=>index+1).filter(number=>latest.bits[16-number]==='1');
+   if(alreadyOpen.length)throw Object.assign(Error(`Close ${alreadyOpen.length===1?'door':'doors'} ${alreadyOpen.join(', ')} on column ${board} before testing another door.`),{code:'DOOR_OPEN'});
    requireContinue();onPhase(`Releasing door ${door} on ${board} for up to 15 seconds. Open the door to relock sooner…`);
    let evidence;
    const seen=new Set(),sampleKey=sample=>JSON.stringify(sample),capture=sample=>{const key=sampleKey(sample);if(!seen.has(key)){seen.add(key);onSample('open',sample);}};

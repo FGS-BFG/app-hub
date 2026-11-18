@@ -1,5 +1,5 @@
-import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-detect';
-import {validateDoorTests,hasDoorTestData,getDoorScope,getDoorTargets} from './door-test.js?v=20261118-detect';
+import {outcome, report, LOCKER_CAPACITIES} from './flow.js?v=20261118-click-door';
+import {validateDoorTests,hasDoorTestData,getDoorScope,getDoorTargets} from './door-test.js?v=20261118-click-door';
 import {validateBeforeRestart} from './before-restart.js?v=20261118-before-restart';
 import {validateBoardDetection,detectedSelection,detectionHasData} from './board-detection.js?v=20261118-detect';
 
