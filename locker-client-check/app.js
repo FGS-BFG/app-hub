@@ -16,7 +16,7 @@ const stamp = new Intl.DateTimeFormat(undefined, {hour: '2-digit', minute: '2-di
 const labels = {
   initial: 'Initial check',
   reset: 'After board reset',
-  usb: 'After USB reconnect',
+  power: 'After power cycle',
 };
 const results = {
   reply: 'Replied',
@@ -26,7 +26,7 @@ const results = {
 };
 const passes = [], entries = [];
 let layout = null, transport = null, stage = 'setup', busy = false, feedback = '';
-let lastDownload = null, resetWriteAt = 0, usbRetestStarted = false, confirmed = false;
+let lastDownload = null, resetWriteAt = 0, portRemovedDuringCycle = false, confirmed = false;
 
 function log(kind, message) {
   const now = new Date();
@@ -79,11 +79,15 @@ function render() {
     if (transport?.connected && watch.present) setButton(primary, 'Save report and reset boards', startReset);
     else {
       setButton(primary, 'Select locker USB and check again', choosePort);
-      setButton(alternate, 'Start USB recovery', beginUsbRecovery);
+      setButton(alternate, 'Power cycle the master board', beginPowerCycle);
     }
   } else if (stage === 'review' && !confirmed) {
-    setButton(primary, 'Start USB recovery', beginUsbRecovery);
-  } else if (stage === 'replug') {
+    setButton(primary, 'Power cycle the master board', beginPowerCycle);
+  } else if (stage === 'power-off') {
+    setButton(primary, 'Power is off', confirmPowerOff);
+  } else if (stage === 'power-on') {
+    setButton(primary, 'Power is back on', confirmPowerOn);
+  } else if (stage === 'power-port') {
     setButton(primary, 'Select the locker USB port', choosePort);
   } else if (stage === 'finished') {
     setButton(primary, 'Start a new check', () => location.reload());
@@ -144,19 +148,17 @@ async function run(action) {
 function usbChanged({type, source}) {
   if (type === 'candidate') {
     log('Observed', 'A matching USB serial device appeared. Select the locker port to confirm the connection. (' + source + ')');
-    if (stage === 'replug') feedback = 'A matching USB device appeared. Select the locker port to continue.';
+    if (stage === 'power-port') feedback = 'A matching USB device appeared. Select the locker port to continue.';
   } else {
     log('Observed', 'Selected USB serial port ' + (type === 'attached' ? 'appeared' : 'disappeared') + ' (' + source + ').');
-    if (type === 'removed' && stage === 'unplug') askToReconnect();
+    if (type === 'removed' && (stage === 'power-off' || stage === 'power-on')) portRemovedDuringCycle = true;
   }
   render();
   maybeRetest();
 }
 
 function maybeRetest() {
-  if (stage !== 'replug' || busy || !watch.present || usbRetestStarted) return;
-  usbRetestStarted = true;
-  run(() => check('usb'));
+  if (stage === 'power-port' && !busy && watch.present) run(() => check('power'));
 }
 
 async function openPort() {
@@ -194,7 +196,7 @@ async function openPort() {
 }
 
 function choosePort() {
-  const kind = stage === 'replug' ? 'usb' : 'initial';
+  const kind = stage === 'power-port' ? 'power' : 'initial';
   run(async () => {
     log('Action', 'Opened the browser USB port picker.');
     let port;
@@ -248,8 +250,8 @@ async function check(kind) {
       : 'Check that the locker USB is connected and the parkIT app is closed. Select the locker port to try again.';
     prompt('The board check is incomplete', instruction, 'initial-failed');
   } else if (kind === 'reset') {
-    log('Result', 'The board check after reset is incomplete. Starting USB recovery.');
-    beginUsbRecovery();
+    log('Result', 'The board check after reset is incomplete. Starting the power cycle.');
+    beginPowerCycle();
   } else {
     prompt('The connection issue remains', 'Add any notes. Save the report and send it to parkIT support.', 'review');
   }
@@ -292,29 +294,36 @@ function startReset() {
   });
 }
 
-function beginUsbRecovery() {
-  usbRetestStarted = false;
+function beginPowerCycle() {
+  portRemovedDuringCycle = false;
+  feedback = '';
   if (!watch.present) {
-    log('Observed', 'The selected serial port was already absent when the USB recovery step started.');
-    prompt(
-      'Check the locker USB cable',
-      'The serial port is already missing. If the locker USB cable is still plugged into the powered hub, unplug it now. Leave the hub powered. Then reconnect the cable to the same socket.',
-      'replug',
-    );
-    return;
+    log('Observed', 'The selected serial port was already absent when the power cycle started.');
   }
   prompt(
-    'Unplug the locker USB cable',
-    'At the powered USB hub inside the controller, unplug the locker USB cable. Leave the hub powered. Wait for the tool to detect the disconnect. A master with a separate supply can stay powered.',
-    'unplug',
+    'Power cycle the master board',
+    'Switch off power to the master board. For a single-board test, switch off the board under test. If USB is its only power source, unplug the locker USB cable at the powered hub. If the board has a separate supply, use the normal locker power switch. When the board is off, select Power is off.',
+    'power-off',
   );
 }
 
-function askToReconnect() {
-  feedback = '';
-  prompt('Reconnect the locker USB cable',
-    'Connect the same locker USB cable to the same socket. Wait for the tool to detect it and check the boards again.',
-    'replug');
+function confirmPowerOff() {
+  log('Operator', 'Confirmed the board power is off.');
+  prompt('Restore power to the board',
+    'Switch the locker power back on if you switched it off. Reconnect the locker USB cable to the same socket if you removed it. Wait for the board to start. Then select Power is back on.',
+    'power-on');
+}
+
+function confirmPowerOn() {
+  log('Operator', 'Confirmed the board power is back on.');
+  if (!portRemovedDuringCycle) log('Observed', 'No USB port removal was detected during the power cycle steps.');
+  if (watch.present) {
+    run(() => check('power'));
+  } else {
+    prompt('Wait for the locker USB port',
+      'Check that the locker USB cable is connected. If the port does not return, select the locker USB port again.',
+      'power-port');
+  }
 }
 
 function downloadReport(suffix) {
