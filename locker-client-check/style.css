@@ -48,6 +48,10 @@ button:disabled { opacity: .52; cursor: default; }
 :focus-visible { outline: 3px solid #237a6c; outline-offset: 3px; }
 .actions { display: flex; gap: .55rem; flex-wrap: wrap; margin-top: 1rem; }
 .feedback { border-left: 3px solid #b98222; padding: .45rem .7rem; background: #fff6e7; }
+.recovery-plan { border: 1px solid #e8d4a8; border-radius: .65rem; background: #fff8ea; padding: .8rem 1rem; }
+.recovery-plan h3 { margin: 0; font-size: 1rem; }
+.recovery-plan ol { margin: .35rem 0 0; padding-left: 1.25rem; }
+.recovery-plan li + li { margin-top: .25rem; }
 table { width: 100%; border-collapse: collapse; margin: .5rem 0; font-size: .9rem; }
 th, td { padding: .45rem .5rem; border-bottom: 1px solid #e2eae7; text-align: left; }
 th[scope="row"] { width: 4.5rem; white-space: nowrap; }

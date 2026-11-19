@@ -67,6 +67,7 @@ function render() {
     : watch.present ? 'USB detected' : 'USB disconnected';
   byId('feedback').textContent = feedback;
   byId('feedback').hidden = !feedback;
+  byId('recovery-plan').hidden = stage !== 'initial-failed' && stage !== 'resetting';
   byId('save').disabled = busy || !passes.length;
   byId('finish').disabled = busy || !passes.length || stage === 'finished';
   byId('finish').textContent = stage === 'review' || stage === 'finished' ? 'Save and finish' : 'Finish with current results';
@@ -76,10 +77,10 @@ function render() {
   if (stage === 'setup') {
     setButton(primary, 'Choose locker USB and check', choosePort, !chosen || !watch);
   } else if (stage === 'initial-failed') {
-    if (transport?.connected && watch.present) setButton(primary, 'Save report and reset boards', startReset);
+    if (transport?.connected && watch.present) setButton(primary, 'Save report and start recovery', startReset);
     else {
       setButton(primary, 'Select locker USB and check again', choosePort);
-      setButton(alternate, 'Power cycle the master board', beginPowerCycle);
+      setButton(alternate, 'Start recovery with a power cycle', beginPowerCycle);
     }
   } else if (stage === 'review' && !confirmed) {
     setButton(primary, 'Power cycle the master board', beginPowerCycle);
@@ -245,10 +246,12 @@ async function check(kind) {
   if (confirmed) {
     prompt('All boards replied', 'Add any notes. Select Save and finish to close the test and download the report.', 'review');
   } else if (kind === 'initial') {
+    const missing = pass.rows.filter(row => row.result !== 'reply').map(row => row.board);
+    const summary = (missing.length === 1 ? 'Board ' : 'Boards ') + missing.join(', ') + ' did not return a valid reply.';
     const instruction = transport?.connected && watch.present
-      ? 'Add any notes. Save the report, then send a reset request to each fitted board and check again.'
-      : 'Check that the locker USB is connected and the parkIT app is closed. Select the locker port to try again.';
-    prompt('The board check is incomplete', instruction, 'initial-failed');
+      ? 'Add any notes, then select Save report and start recovery.'
+      : 'Reconnect to the locker USB to reset the boards. If you cannot reconnect, start recovery with a power cycle.';
+    prompt('Recovery needed', summary + ' ' + instruction, 'initial-failed');
   } else if (kind === 'reset') {
     log('Result', 'The board check after reset is incomplete. Starting the power cycle.');
     beginPowerCycle();
@@ -271,7 +274,7 @@ function startReset() {
   }
   run(async () => {
     const order = layout.boards.filter(board => board !== layout.master).concat(layout.master);
-    prompt('Reset the fitted boards', 'Keep the locker USB connected. The tool sends each reset request and resets the master last.', 'resetting');
+    prompt('Recovery in progress', 'Keep the locker USB connected. The tool resets the fitted boards, with the master last, then checks for replies again.', 'resetting');
     log('Action', 'Reset order ' + order.join(', ') + '.');
     resetWriteAt = 0;
     for (const board of order) {

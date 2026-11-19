@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Locker Connection Check · FGS</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=visible-recovery">
 </head>
 <body>
   <header>
@@ -32,6 +32,13 @@
         <p id="layout" class="muted"></p>
       </div>
       <p id="feedback" class="feedback" role="status" hidden></p>
+      <section id="recovery-plan" class="recovery-plan" aria-labelledby="recovery-title" hidden>
+        <h3 id="recovery-title">Recovery steps</h3>
+        <ol>
+          <li>Save the initial report. Reset the boards and check for replies again.</li>
+          <li>If any board is still missing, power cycle the master board and check again.</li>
+        </ol>
+      </section>
       <div class="actions">
         <button type="button" id="primary" class="primary" disabled>Choose locker USB and check</button>
         <button type="button" id="alternate" hidden></button>
@@ -59,6 +66,6 @@
       </details>
     </section>
   </main>
-  <script type="module" src="app.js?v=master-power-cycle"></script>
+  <script type="module" src="app.js?v=visible-recovery"></script>
 </body>
 </html>
