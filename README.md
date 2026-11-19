@@ -9,3 +9,9 @@ GitHub Pages builds the site when changes are pushed to the configured branch. T
 ## Locker troubleshooting guide
 
 Open the [USB troubleshooting guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/). Source and maintenance instructions are in `locker-troubleshooting/README.md`; regression tests are in `tests/locker-troubleshooting/`. It connects to a user-selected USB COM port and keeps diagnostic records on that device. Publishing does not verify physical locker operation.
+
+## Locker Connection Check
+
+Share [locker-connection-check.html](https://fgs-bfg.github.io/app-hub/locker-client-check/locker-connection-check.html) as a standalone file. Save it to the computer and open it in desktop Chrome or Edge. The app and recovery photo are embedded. USB access still requires the operator to choose the locker port.
+
+After editing the client app or its shared serial code, run `node locker-client-check/build-standalone.mjs` from the repository root. Commit the generated HTML with the source update.

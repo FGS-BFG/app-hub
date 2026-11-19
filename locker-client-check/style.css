@@ -9,6 +9,7 @@
 body { margin: 0; }
 .wrap { width: min(100% - 2rem, 54rem); margin: 0 auto; }
 header { padding: 1.5rem 0 2.2rem; background: #153b3b; color: #fff; }
+.header-links { display: flex; flex-wrap: wrap; gap: .4rem 1.15rem; }
 header a { color: #d2ede5; font-weight: 550; text-underline-offset: .2em; }
 header p { margin: 0; color: #d2ede5; }
 h1 { margin: .65rem 0 .25rem; font-size: clamp(1.75rem, 4.5vw, 2.6rem); line-height: 1.15; }
