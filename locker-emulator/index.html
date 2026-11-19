@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCI 304 Locker Emulator</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="frame top-content">
+      <div><a class="product" href="../">← App Hub</a><h1>MCI 304 Locker Emulator</h1></div>
+      <div class="caption"><span class="dot"></span> <span id="connection">Pico disconnected</span> <span class="divider">/</span> CPU/IO v2.02 · FW 1.5.9fs</div>
+    </div>
+  </header>
+  <main class="frame workspace">
+    <section class="panel cabinet" aria-labelledby="column-title">
+      <div class="panel-head"><div><h2 id="column-title">Locker cabinet</h2><p>5 controllers · 80 bays</p></div><button id="connect" type="button">Connect Pico</button></div>
+      <p id="connection-help" class="connection-help" role="status">Plug in the Pico. Connect its cabinet port here and use its other COM port in the locker app.</p>
+      <p id="last-release" class="release-status" role="status">No lock release recorded</p>
+      <p id="door-status" class="door-status" role="status" hidden></p>
+      <div class="cabinet-stage">
+        <div class="metal-cabinet">
+          <div class="service-hatch">
+            <div id="controller-deck" class="controller-deck" hidden></div>
+            <button id="service-toggle" class="hatch-cover" type="button" aria-expanded="false" aria-controls="controller-deck">
+              <span>Open service hatch</span>
+            </button>
+          </div>
+          <div id="bays" class="bays"></div>
+          <div class="base-hatch" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="legend"><span class="legend-closed">Closed</span><span class="legend-open">Open</span><span class="legend-driven">Output active</span><span class="legend-release">Last release</span></div>
+    </section>
+    <section class="panel monitor" aria-labelledby="monitor-title">
+      <div class="panel-head"><h2 id="monitor-title">Live serial monitor</h2></div>
+      <div id="trace" class="trace" role="region" aria-label="Serial commands, replies and door events" tabindex="0">
+        <p class="trace-empty">Waiting for serial traffic</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

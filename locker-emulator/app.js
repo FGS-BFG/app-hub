@@ -1,0 +1,280 @@
+import {Locker, SerialFrames, boards, bays} from './model.js';
+
+const el = id => document.getElementById(id);
+const connectButton = el('connect');
+const help = el('connection-help');
+const encoder = new TextEncoder();
+let locker = new Locker();
+let bridge = null;
+let opening = false;
+let lastRelease = null;
+let renderedEvent = null;
+let paintPending = false;
+
+function update() {
+  if (!paintPending) {
+    paintPending = true;
+    requestAnimationFrame(() => {
+      paintPending = false;
+      render();
+    });
+  }
+}
+
+class Pico {
+  constructor(port) {
+    this.port = port;
+    this.frames = new SerialFrames();
+    this.pending = '';
+    this.outgoing = Promise.resolve();
+  }
+
+  async open() {
+    await this.port.open({baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none'});
+    this.portOpen = true;
+    await this.port.setSignals({dataTerminalReady: true, requestToSend: false});
+    this.reader = this.port.readable.getReader();
+    this.writer = this.port.writable.getWriter();
+    this.pump = this.read();
+    try {
+      for (let attempt = 0; attempt < 5 && !this.ready; attempt++) {
+        await this.writer.write(encoder.encode('\n?\n'));
+        await new Promise(resolve => setTimeout(resolve, 250));
+        if (this.failure) throw this.failure;
+      }
+      if (!this.ready) throw Error('The Pico did not answer. Choose the other Pico COM port or close any cabinet already using it.');
+      this.timer = setInterval(() => {
+        this.writeReply(locker.tick());
+        if (locker.events.at(-1) !== renderedEvent) update();
+      }, 30);
+    } catch (error) {
+      await this.close();
+      throw error;
+    }
+  }
+
+  async read() {
+    const decoder = new TextDecoder();
+    try {
+      while (!this.closing) {
+        const {value, done} = await this.reader.read();
+        if (done) break;
+        this.pending += decoder.decode(value, {stream: true});
+        let end;
+        while ((end = this.pending.indexOf('\n')) !== -1) {
+          const line = this.pending.slice(0, end).replace(/\r$/, '');
+          this.pending = this.pending.slice(end + 1);
+          if (line === 'MCI304-USB-1') {
+            this.ready = true;
+          } else if (this.ready && line === '!write') {
+            throw Error('The Pico could not deliver a reply. Reconnect both apps.');
+          } else if (this.ready && /^>(?:[\da-f]{2})+$/i.test(line)) {
+            const bytes = line.slice(1).match(/../g);
+            const data = String.fromCharCode(...bytes.map(byte => parseInt(byte, 16)));
+            for (const frame of this.frames.feed(data)) {
+              this.writeReply(locker.tick() + locker.command(frame));
+              update();
+            }
+          }
+        }
+        if (this.pending.length > 1024) this.pending = '';
+      }
+      if (!this.closing) throw Error('The Pico disconnected. Plug it in and connect again.');
+    } catch (error) {
+      if (!this.closing) {
+        this.failure = error;
+        if (bridge === this) void disconnect(error.message);
+      }
+    }
+  }
+
+  writeReply(reply) {
+    if (!reply || this.closing) return;
+    this.outgoing = this.outgoing.then(async () => {
+      if (this.closing) return;
+      for (let offset = 0; offset < reply.length; offset += 64) {
+        const hex = Array.from(reply.slice(offset, offset + 64), byte => byte.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+        await this.writer.write(encoder.encode('<' + hex + '\n'));
+      }
+    }).catch(error => {
+      if (!this.closing && bridge === this) void disconnect(error.message);
+    });
+  }
+
+  async close() {
+    if (this.closing) return;
+    this.closing = true;
+    clearInterval(this.timer);
+    try { await this.reader?.cancel(); } catch {}
+    await this.pump;
+    this.reader?.releaseLock();
+    try { await this.writer?.abort(); } catch {}
+    this.writer?.releaseLock();
+    if (this.portOpen) {
+      try { await this.port.close(); } catch {}
+    }
+  }
+}
+
+async function disconnect(message = 'Disconnected. Connect the Pico to restart the cabinet.') {
+  const current = bridge;
+  bridge = null;
+  opening = true;
+  await current?.close();
+  help.textContent = message;
+  opening = false;
+  render();
+}
+
+async function connect() {
+  if (bridge) {
+    await disconnect();
+    return;
+  }
+  if (opening) return;
+  opening = true;
+  render();
+  let candidate;
+  try {
+    const port = await navigator.serial.requestPort({filters: [{usbVendorId: 0x239a, usbProductId: 0x80f4}]});
+    candidate = new Pico(port);
+    locker = new Locker();
+    lastRelease = null;
+    await candidate.open();
+    bridge = candidate;
+    help.textContent = 'Use the other Pico COM port in the locker app. Click an energised door to open it. Click again to close it.';
+  } catch (error) {
+    await candidate?.close();
+    if (error.name !== 'NotFoundError') help.textContent = error.message;
+  } finally {
+    opening = false;
+    render();
+  }
+}
+
+function renderTrace() {
+  const events = locker.events;
+  if (renderedEvent === events.at(-1)) return;
+  renderedEvent = events.at(-1);
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.kind !== 'BOARD') continue;
+    const match = /^([A-E])\/([0-9A-F]) · output latched/.exec(event.message);
+    if (match) {
+      lastRelease = {board: match[1], bay: bays.indexOf(match[2])};
+      break;
+    }
+  }
+
+  const trace = el('trace');
+  const top = trace.scrollTop;
+  const follow = trace.scrollHeight - trace.clientHeight - top < 12;
+  const rows = events.map(event => {
+    const row = document.createElement('div');
+    row.className = 'trace-row';
+    row.dataset.kind = event.kind;
+    const time = document.createElement('span');
+    const kind = document.createElement('strong');
+    const message = document.createElement('span');
+    time.textContent = event.time;
+    kind.textContent = event.kind;
+    message.textContent = event.message;
+    row.append(time, kind, message);
+    return row;
+  });
+  trace.replaceChildren(...rows);
+  trace.scrollTop = follow ? trace.scrollHeight : top;
+}
+
+function render() {
+  connectButton.disabled = opening || !navigator.serial;
+  connectButton.textContent = bridge ? 'Disconnect' : 'Connect Pico';
+  el('connection').textContent = bridge ? 'Pico connected' : opening ? 'Connecting' : 'Pico disconnected';
+  renderTrace();
+  const release = el('last-release');
+  const label = lastRelease
+    ? 'Last release request · Board ' + lastRelease.board + ', door ' + (lastRelease.bay + 1)
+    : 'No lock release recorded';
+  if (release.textContent !== label) release.textContent = label;
+  for (const [address, buttons] of Object.entries(modules)) {
+    const board = locker.boards[address];
+    buttons.forEach((button, index) => {
+      const open = Boolean(board.opened & (1 << index));
+      const active = Boolean(board.outputs & (1 << index));
+      button.dataset.open = open;
+      button.dataset.active = active;
+      button.dataset.recent = lastRelease?.board === address && lastRelease.bay === index;
+      const name = 'Board ' + address + ', door ' + (index + 1) + ' · ' + (open ? 'open' : 'closed')
+        + (active ? ' · lock energised' : '');
+      button.setAttribute('aria-label', name);
+      button.title = name;
+    });
+  }
+}
+
+function makeBay(address, code, index) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'bay';
+  button.dataset.board = address;
+  button.dataset.bay = code;
+  const face = document.createElement('span');
+  face.className = 'door-face';
+  const window = document.createElement('span');
+  window.className = 'door-window';
+  window.textContent = index + 1;
+  const pull = document.createElement('span');
+  pull.className = 'door-pull';
+  const lamp = document.createElement('span');
+  lamp.className = 'door-lamp';
+  face.append(window, pull);
+  button.append(lamp, face);
+  button.addEventListener('click', () => {
+    const status = el('door-status');
+    status.textContent = '';
+    if (!bridge) {
+      status.textContent = 'Connect the Pico first';
+    } else {
+      bridge.writeReply(locker.tick());
+      if (!locker.move(address, index)) status.textContent = 'Board ' + address + ', door ' + (index + 1) + ' is locked';
+    }
+    status.hidden = !status.textContent;
+    render();
+  });
+  return button;
+}
+
+const modules = Object.fromEntries(Array.from(boards, address => {
+  const buttons = Array.from(bays, (code, index) => makeBay(address, code, index));
+  const module = document.createElement('div');
+  module.className = 'module';
+  const label = document.createElement('div');
+  label.className = 'module-name';
+  label.textContent = address;
+  const doors = document.createElement('div');
+  doors.className = 'module-doors';
+  for (let bank = 0; bank < 2; bank++) {
+    const side = document.createElement('div');
+    side.className = 'bank';
+    side.append(...buttons.slice(bank * 8, bank * 8 + 8));
+    doors.append(side);
+  }
+  module.append(label, doors);
+  el('bays').append(module);
+  const controller = document.createElement('div');
+  controller.className = 'controller';
+  controller.textContent = address;
+  el('controller-deck').append(controller);
+  return [address, buttons];
+}));
+
+el('service-toggle').addEventListener('click', () => {
+  const toggle = el('service-toggle');
+  const expanded = toggle.getAttribute('aria-expanded') === 'true';
+  toggle.setAttribute('aria-expanded', String(!expanded));
+  toggle.firstElementChild.textContent = expanded ? 'Open service hatch' : 'Close service hatch';
+  el('controller-deck').hidden = expanded;
+});
+connectButton.addEventListener('click', connect);
+if (!navigator.serial) help.textContent = 'Open this page in desktop Chrome or Edge with serial access enabled.';
+render();
