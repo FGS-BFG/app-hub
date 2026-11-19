@@ -1,5 +1,6 @@
 export const boards = 'ABCDE';
 export const bays = '0123456789ABCDEF';
+export const openDoorLimit = 4;
 const firmware = 'Firmware : MCi_304-Fw1.5.9fs';
 const directWrite = /^([WP][\s\S]{2})(?:#([A-Z]))?$/;
 const routed = /^([^#]+)(?:#([A-Z]))?$/;
@@ -62,6 +63,7 @@ export class Locker {
     this.started = clock();
     this.boards = Object.fromEntries(Array.from(boards, address => [address, new Board()]));
     this.events = [];
+    this.openCount = 0;
     this.event('SYSTEM', 'Cabinet ready. All 80 doors are closed.');
   }
 
@@ -75,17 +77,32 @@ export class Locker {
     return '<' + address + '>' + body + (address === this.master ? '' : '~') + '\n\r';
   }
 
+  get powerOn() {
+    return this.openCount <= openDoorLimit;
+  }
+
+  coilActive(address, bay) {
+    return this.powerOn && Boolean(this.boards[address].outputs & (1 << bay));
+  }
+
   move(address, bay) {
     const board = this.boards[address];
     const mask = 1 << bay;
     const opened = !(board.opened & mask);
     const label = 'Bay ' + address + '/' + bays[bay];
-    if (opened && !(board.outputs & mask)) {
-      this.event('FAULT', label + ' · door stayed closed, coil has no drive');
+    if (opened && !this.coilActive(address, bay)) {
+      const reason = this.powerOn ? 'coil has no drive' : 'power supplies are off';
+      this.event('FAULT', label + ' · door stayed closed, ' + reason);
       return false;
     }
+    const powerWasOn = this.powerOn;
     board.opened ^= mask;
+    this.openCount += opened ? 1 : -1;
     this.event('DOOR', label + (opened ? ' opened · sensor bit 1' : ' closed · sensor bit 0'));
+    if (powerWasOn !== this.powerOn) {
+      this.event('POWER', (this.powerOn ? 'Power supplies restored' : 'Power supplies off')
+        + ' · ' + this.openCount + ' doors open');
+    }
     return true;
   }
 
@@ -188,7 +205,10 @@ export class Locker {
         : (pair[2] === 'X' ? 0 : 1 << Number(pair[2])) | (pair[3] === 'X' ? 0 : 1 << (8 + Number(pair[3])));
       board.latch(single ? before | mask : mask);
       for (let index = 0; index < 16; index++) {
-        if (mask & (1 << index)) this.event('BOARD', address + '/' + bays[index] + ' · output latched · coil energised');
+        if (mask & (1 << index)) {
+          this.event('BOARD', address + '/' + bays[index] + ' · output latched · coil '
+            + (this.coilActive(address, index) ? 'energised' : 'de-energised'));
+        }
       }
       if ((single || pair)[1] === 'A') board.clearAt = this.clock() + board.duration[0] * board.speed / 8;
       return say(lockWord(board)) + say('Lock Active');

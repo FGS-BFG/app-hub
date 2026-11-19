@@ -66,7 +66,17 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
 }
 .hatch-cover::before, .base-hatch::before { left: 10%; }
 .hatch-cover::after, .base-hatch::after { right: 10%; }
-.base-hatch { margin: 9px 5px 0; height: 46px; }
+.base-hatch { display: grid; place-items: center; margin: 9px 5px 0; min-height: 46px; padding: 4px 32px; }
+.power-panel {
+  display: grid; grid-template-columns: 10px auto; gap: 2px 7px; align-items: center;
+  padding: 4px 9px; border-radius: 3px; background: #e6f1e9; color: #174939;
+  font: .65rem/1.2 ui-monospace, monospace;
+}
+.power-lamp { width: 8px; height: 8px; border-radius: 50%; background: #21865f; }
+.power-panel strong { text-transform: uppercase; letter-spacing: .025em; }
+#open-count { grid-column: 2; }
+.power-panel[data-on=false] { background: #6b1b24; color: #fff3f0; }
+.power-panel[data-on=false] .power-lamp { background: #ff8e7f; box-shadow: 0 0 6px #ff8e7f; }
 .controller-deck { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--module-gap); padding: 8px 4px 6px; background: linear-gradient(#333e3b, #5a6861); }
 .controller-deck:not([hidden]) { display: grid; }
 .controller {
@@ -137,6 +147,7 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
 .trace-row span:first-child { color: #aec7c2; }
 .trace-row strong { color: #9be1cc; }
 .trace-row[data-kind="FAULT"] strong { color: #ffd08e; }
+.trace-row[data-kind="POWER"] strong { color: #ffd08e; }
 @media (max-width: 640px) {
   .frame { padding-inline: 12px; }
   .top-content, .workspace { display: grid; grid-template-columns: minmax(0, 1fr); }

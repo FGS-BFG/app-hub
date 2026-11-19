@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCI 304 Locker Emulator</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css">
-  <script type="module" src="app.js"></script>
+  <link rel="stylesheet" href="style.css?v=power">
+  <script type="module" src="app.js?v=power"></script>
 </head>
 <body>
   <header class="top">
@@ -30,7 +30,13 @@
             </button>
           </div>
           <div id="bays" class="bays"></div>
-          <div class="base-hatch" aria-hidden="true"></div>
+          <div class="base-hatch">
+            <div id="power-panel" class="power-panel" data-on="true" role="status">
+              <span class="power-lamp" aria-hidden="true"></span>
+              <strong id="power-status">Power supplies on</strong>
+              <span id="open-count">0 doors open</span>
+            </div>
+          </div>
         </div>
       </div>
       <div class="legend"><span class="legend-closed">Closed</span><span class="legend-open">Open</span><span class="legend-driven">Output active</span><span class="legend-release">Last release</span></div>

@@ -26,6 +26,29 @@ test('a bay opens only with its coil active, closes after LC, and preserves othe
   assert.equal(locker.command('ISB#A'), '<A>Ex(BIN):00000000:00000000~\n\r');
 });
 
+test('the fifth open door cuts cabinet-wide coil power until the count returns to four', () => {
+  const locker = new Locker();
+  for (const [index, board] of [...boards].entries()) {
+    assert.equal(locker.command('LM0#' + board), '');
+    assert.equal(locker.move(board, 0), true);
+    assert.equal(locker.openCount, index + 1);
+    assert.equal(locker.powerOn, index < 4);
+  }
+  assert.equal(locker.command('ISB#C'), '<C>Ex(BIN):00000000:00000001\n\r');
+  locker.command('LM1#A');
+  assert.equal(locker.command('LRS#A'), '<A>Lock Word:0000000000000011~\n\r');
+  assert.equal(locker.coilActive('A', 1), false);
+  assert.equal(locker.move('A', 1), false);
+  assert.equal(locker.openCount, 5);
+  assert.equal(locker.move('E', 0), true);
+  assert.equal(locker.openCount, 4);
+  assert.equal(locker.powerOn, true);
+  assert.equal(locker.coilActive('A', 1), true);
+  assert.deepEqual(locker.events.filter(event => event.kind === 'POWER').map(event => event.message), [
+    'Power supplies off · 5 doors open', 'Power supplies restored · 4 doors open',
+  ]);
+});
+
 test('serial framing keeps partial ASCII and literal raw I/O bytes', () => {
   const frames = new SerialFrames();
   assert.deepEqual(frames.feed('L'), []);

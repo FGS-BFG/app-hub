@@ -1,4 +1,4 @@
-import {Locker, SerialFrames, boards, bays} from './model.js';
+import {Locker, SerialFrames, boards, bays, openDoorLimit} from './model.js?v=power';
 
 const el = id => document.getElementById(id);
 const connectButton = el('connect');
@@ -159,9 +159,9 @@ function renderTrace() {
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
     if (event.kind !== 'BOARD') continue;
-    const match = /^([A-E])\/([0-9A-F]) · output latched/.exec(event.message);
+    const match = /^([A-E])\/([0-9A-F]) · output latched · coil (energised|de-energised)$/.exec(event.message);
     if (match) {
-      lastRelease = {board: match[1], bay: bays.indexOf(match[2])};
+      lastRelease = {board: match[1], bay: bays.indexOf(match[2]), powered: match[3] === 'energised'};
       break;
     }
   }
@@ -191,16 +191,24 @@ function render() {
   connectButton.textContent = bridge ? 'Disconnect' : 'Connect Pico';
   el('connection').textContent = bridge ? 'Pico connected' : opening ? 'Connecting' : 'Pico disconnected';
   renderTrace();
+  const power = el('power-panel');
+  const status = locker.powerOn ? 'Power supplies on' : 'Power supplies off';
+  const count = locker.openCount + (locker.openCount === 1 ? ' door open' : ' doors open')
+    + (locker.powerOn ? '' : ' · limit ' + openDoorLimit);
+  power.dataset.on = locker.powerOn;
+  if (el('power-status').textContent !== status) el('power-status').textContent = status;
+  if (el('open-count').textContent !== count) el('open-count').textContent = count;
   const release = el('last-release');
   const label = lastRelease
     ? 'Last release request · Board ' + lastRelease.board + ', door ' + (lastRelease.bay + 1)
+      + (lastRelease.powered ? '' : ' · no coil power')
     : 'No lock release recorded';
   if (release.textContent !== label) release.textContent = label;
   for (const [address, buttons] of Object.entries(modules)) {
     const board = locker.boards[address];
     buttons.forEach((button, index) => {
       const open = Boolean(board.opened & (1 << index));
-      const active = Boolean(board.outputs & (1 << index));
+      const active = locker.coilActive(address, index);
       button.dataset.open = open;
       button.dataset.active = active;
       button.dataset.recent = lastRelease?.board === address && lastRelease.bay === index;
@@ -236,7 +244,11 @@ function makeBay(address, code, index) {
       status.textContent = 'Connect the Pico first';
     } else {
       bridge.writeReply(locker.tick());
-      if (!locker.move(address, index)) status.textContent = 'Board ' + address + ', door ' + (index + 1) + ' is locked';
+      if (!locker.move(address, index)) {
+        status.textContent = locker.powerOn
+          ? 'Board ' + address + ', door ' + (index + 1) + ' is locked'
+          : 'Power supplies off. Close a door to restore power.';
+      }
     }
     status.hidden = !status.textContent;
     render();

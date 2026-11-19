@@ -21,3 +21,5 @@ After editing the client app or its shared serial code, run `node locker-client-
 Open the [locker emulator](https://fgs-bfg.github.io/app-hub/locker-emulator/) in desktop Chrome or Edge. Plug in a Pico running the MCI304 USB bridge and click **Connect Pico**. Choose its cabinet COM interface. Select the other Pico COM interface in the locker operation app. On a new PC, the assigned COM numbers can change. The cabinet checks the bridge protocol before accepting a port.
 
 Keep the emulator open while the locker app is connected. It models board C as master, with 1 for an open door and 0 for a closed door. Click an energised door to open it and click it again to close it. The monitor shows the serial commands, replies and door events. The simulator runs in the browser and stores its state for the current connection.
+
+The cabinet's power indicator turns off when a fifth door opens. The simulator cuts coil drive during the trip and restores it when four or fewer doors remain open. The serial controller stays available for status polling.
