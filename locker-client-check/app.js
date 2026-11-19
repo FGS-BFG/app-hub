@@ -10,6 +10,8 @@ const startedAt = new Date();
 const serial = navigator.serial;
 const watch = serial ? new PortWatch(serial, usbChanged) : null;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const resetSettleMs = 6000;
+const resetReconnectMs = 8000;
 const stamp = new Intl.DateTimeFormat(undefined, {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 const labels = {
   initial: 'Initial check',
@@ -24,7 +26,7 @@ const results = {
 };
 const passes = [], entries = [];
 let layout = null, transport = null, stage = 'setup', busy = false, feedback = '';
-let lastDownload = null, masterWriteAt = 0, usbRetestStarted = false, confirmed = false;
+let lastDownload = null, resetWriteAt = 0, usbRetestStarted = false, confirmed = false;
 
 function log(kind, message) {
   const now = new Date();
@@ -67,6 +69,7 @@ function render() {
   byId('feedback').hidden = !feedback;
   byId('save').disabled = busy || !passes.length;
   byId('finish').disabled = busy || !passes.length || stage === 'finished';
+  byId('finish').textContent = stage === 'review' || stage === 'finished' ? 'Save and finish' : 'Finish with current results';
   notes.readOnly = stage === 'finished';
   setButton(primary, '', null);
   setButton(alternate, '', null);
@@ -78,7 +81,7 @@ function render() {
       setButton(primary, 'Select locker USB and check again', choosePort);
       setButton(alternate, 'Start USB recovery', beginUsbRecovery);
     }
-  } else if (stage === 'reset-failed' || (stage === 'review' && !confirmed)) {
+  } else if (stage === 'review' && !confirmed) {
     setButton(primary, 'Start USB recovery', beginUsbRecovery);
   } else if (stage === 'replug') {
     setButton(primary, 'Select the locker USB port', choosePort);
@@ -168,7 +171,7 @@ async function openPort() {
       if (event.type === 'rx') log('RX', JSON.stringify(event.raw));
       if (event.type === 'tx') log('TX attempt', event.command);
       if (event.type === 'reset-written') {
-        if (event.board === layout.master) masterWriteAt = Date.now();
+        resetWriteAt = Date.now();
         log('TX written', event.command);
       }
       if (event.type === 'error' || event.type === 'warning') log('Serial ' + event.type, event.message);
@@ -245,10 +248,18 @@ async function check(kind) {
       : 'Check that the locker USB is connected and the parkIT app is closed. Select the locker port to try again.';
     prompt('The board check is incomplete', instruction, 'initial-failed');
   } else if (kind === 'reset') {
-    prompt('Some boards still did not reply', 'Start USB recovery to disconnect and reconnect the locker USB cable at the powered hub.', 'reset-failed');
+    log('Result', 'The board check after reset is incomplete. Starting USB recovery.');
+    beginUsbRecovery();
   } else {
     prompt('The connection issue remains', 'Add any notes. Save the report and send it to parkIT support.', 'review');
   }
+}
+
+async function waitForResetPort() {
+  if (!resetWriteAt) return;
+  const earliest = resetWriteAt + resetSettleMs;
+  const deadline = earliest + resetReconnectMs;
+  while (Date.now() < earliest || (!watch.present && Date.now() < deadline)) await sleep(150);
 }
 
 function startReset() {
@@ -260,11 +271,14 @@ function startReset() {
     const order = layout.boards.filter(board => board !== layout.master).concat(layout.master);
     prompt('Reset the fitted boards', 'Keep the locker USB connected. The tool sends each reset request and resets the master last.', 'resetting');
     log('Action', 'Reset order ' + order.join(', ') + '.');
-    masterWriteAt = 0;
+    resetWriteAt = 0;
     for (const board of order) {
       if (!watch.present || !transport.connected) {
-        log('Result', 'RST#' + board + ' skipped. Serial connection unavailable.');
-        continue;
+        await waitForResetPort();
+        if (!await openPort()) {
+          log('Result', 'RST#' + board + ' skipped. Serial connection unavailable.');
+          continue;
+        }
       }
       try {
         const {acknowledged} = await transport.resetBoard(board);
@@ -273,26 +287,27 @@ function startReset() {
         log('Result', 'RST#' + board + ' interrupted or rejected. ' + error.message);
       }
     }
-    if (masterWriteAt) {
-      const earliest = masterWriteAt + 6000;
-      const deadline = earliest + 8000;
-      while (Date.now() < earliest || (!watch.present && Date.now() < deadline)) await sleep(150);
-    }
+    await waitForResetPort();
     await check('reset');
   });
 }
 
 function beginUsbRecovery() {
   usbRetestStarted = false;
+  if (!watch.present) {
+    log('Observed', 'The selected serial port was already absent when the USB recovery step started.');
+    prompt(
+      'Check the locker USB cable',
+      'The serial port is already missing. If the locker USB cable is still plugged into the powered hub, unplug it now. Leave the hub powered. Then reconnect the cable to the same socket.',
+      'replug',
+    );
+    return;
+  }
   prompt(
     'Unplug the locker USB cable',
     'At the powered USB hub inside the controller, unplug the locker USB cable. Leave the hub powered. Wait for the tool to detect the disconnect. A master with a separate supply can stay powered.',
     'unplug',
   );
-  if (!watch.present) {
-    log('Observed', 'The selected serial port was already absent when the USB recovery step started.');
-    askToReconnect();
-  }
 }
 
 function askToReconnect() {
@@ -333,7 +348,7 @@ function downloadReport(suffix) {
 
 function finish() {
   run(async () => {
-    log('Action', 'Operator selected Save and finish.');
+    log('Action', 'Operator selected ' + byId('finish').textContent + '.');
     await transport?.close();
     watch.stop();
     prompt('Test closed', 'Keep the report for your records or send it to parkIT support.', 'finished');
