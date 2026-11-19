@@ -60,6 +60,7 @@ function render() {
   const chosen = layout ?? layoutForCapacity(capacity.value);
   byId('layout').textContent = chosen ? 'Boards ' + chosen.boards.join(', ') + ' · Master ' + chosen.master : '';
   byId('setup').hidden = stage !== 'setup';
+  byId('usb-reference').hidden = !['setup', 'power-off', 'power-on', 'power-port'].includes(stage);
   capacity.disabled = busy;
   byId('usb').textContent = stage === 'finished' ? 'Test closed'
     : transport?.connected && watch.present ? 'USB open'

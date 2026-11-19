@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Locker Connection Check · FGS</title>
-  <link rel="stylesheet" href="style.css?v=visible-recovery">
+  <link rel="stylesheet" href="style.css?v=usb-hub-photo">
 </head>
 <body>
   <header>
@@ -43,6 +43,14 @@
         <button type="button" id="primary" class="primary" disabled>Choose locker USB and check</button>
         <button type="button" id="alternate" hidden></button>
       </div>
+      <figure id="usb-reference" class="usb-reference">
+        <img src="locker-usb-hub.png" width="936" height="1248" decoding="async"
+          alt="Black USB plug labelled LOCKER in a powered hub with blue-lit ports.">
+        <figcaption>
+          <strong>Find the locker USB cable</strong>
+          <span>Look for the plug labelled <b>LOCKER</b> on the powered USB hub. Your hub may look different.</span>
+        </figcaption>
+      </figure>
     </section>
     <section class="panel" id="results" aria-labelledby="results-title" hidden>
       <div class="panel-top">
@@ -66,6 +74,6 @@
       </details>
     </section>
   </main>
-  <script type="module" src="app.js?v=visible-recovery"></script>
+  <script type="module" src="app.js?v=usb-hub-photo"></script>
 </body>
 </html>
