@@ -247,7 +247,7 @@ async function check(kind) {
   } else if (kind === 'reset') {
     prompt('Some boards still did not reply', 'Start USB recovery to disconnect and reconnect the locker USB cable at the powered hub.', 'reset-failed');
   } else {
-    prompt('The connection issue remains', 'Add any notes. Save the report and send it to FGS support.', 'review');
+    prompt('The connection issue remains', 'Add any notes. Save the report and send it to parkIT support.', 'review');
   }
 }
 
@@ -336,7 +336,7 @@ function finish() {
     log('Action', 'Operator selected Save and finish.');
     await transport?.close();
     watch.stop();
-    prompt('Test closed', 'Keep the report for your records or send it to FGS support.', 'finished');
+    prompt('Test closed', 'Keep the report for your records or send it to parkIT support.', 'finished');
     downloadReport('final');
   });
 }
