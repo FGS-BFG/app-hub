@@ -1,6 +1,6 @@
 export const boards = 'ABCDE';
 export const bays = '0123456789ABCDEF';
-export const openDoorLimit = 4;
+const lockLimit = 4;
 const firmware = 'Firmware : MCi_304-Fw1.5.9fs';
 const directWrite = /^([WP][\s\S]{2})(?:#([A-Z]))?$/;
 const routed = /^([^#]+)(?:#([A-Z]))?$/;
@@ -63,7 +63,8 @@ export class Locker {
     this.started = clock();
     this.boards = Object.fromEntries(Array.from(boards, address => [address, new Board()]));
     this.events = [];
-    this.openCount = 0;
+    this.powerOn = true;
+    this.tripCount = null;
     this.event('SYSTEM', 'Cabinet ready. All 80 doors are closed.');
   }
 
@@ -77,8 +78,24 @@ export class Locker {
     return '<' + address + '>' + body + (address === this.master ? '' : '~') + '\n\r';
   }
 
-  get powerOn() {
-    return this.openCount <= openDoorLimit;
+  get activeLockCount() {
+    let count = 0;
+    for (const board of Object.values(this.boards)) {
+      for (let mask = board.outputs; mask; mask &= mask - 1) count++;
+    }
+    return count;
+  }
+
+  restorePower() {
+    if (this.powerOn) return;
+    for (const address of boards) {
+      const opened = this.boards[address].opened;
+      this.boards[address] = new Board();
+      this.boards[address].opened = opened;
+    }
+    this.tripCount = null;
+    this.powerOn = true;
+    this.event('POWER', 'Power supplies restored · serial online');
   }
 
   coilActive(address, bay) {
@@ -95,18 +112,15 @@ export class Locker {
       this.event('FAULT', label + ' · door stayed closed, ' + reason);
       return false;
     }
-    const powerWasOn = this.powerOn;
     board.opened ^= mask;
-    this.openCount += opened ? 1 : -1;
-    this.event('DOOR', label + (opened ? ' opened · sensor bit 1' : ' closed · sensor bit 0'));
-    if (powerWasOn !== this.powerOn) {
-      this.event('POWER', (this.powerOn ? 'Power supplies restored' : 'Power supplies off')
-        + ' · ' + this.openCount + ' doors open');
-    }
+    const doorState = opened ? ' opened' : ' closed';
+    const sensorState = this.powerOn ? ' · sensor bit ' + Number(opened) : ' · controller offline';
+    this.event('DOOR', label + doorState + sensorState);
     return true;
   }
 
   command(raw) {
+    if (!this.powerOn) return '';
     this.event('TX', visible(raw + '\r'));
     const match = directWrite.exec(raw) || routed.exec(raw);
     const body = match?.[1] ?? raw;
@@ -117,6 +131,14 @@ export class Locker {
       return '';
     }
     const result = this.execute(board, address, body, Boolean(match?.[2]));
+    const active = this.activeLockCount;
+    if (active > lockLimit) {
+      this.tripCount = active;
+      this.powerOn = false;
+      for (const linked of Object.values(this.boards)) linked.clear();
+      this.event('POWER', 'Power supplies off · ' + active + ' locks energised · serial offline');
+      return '';
+    }
     this.event('RX', result ? visible(result) : 'No acknowledgement');
     return result;
   }
@@ -251,6 +273,7 @@ export class Locker {
   }
 
   tick() {
+    if (!this.powerOn) return '';
     let replies = '';
     const now = this.clock();
     for (const [address, board] of Object.entries(this.boards)) {

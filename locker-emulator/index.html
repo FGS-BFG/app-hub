@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCI 304 Locker Emulator</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=power">
-  <script type="module" src="app.js?v=power"></script>
+  <link rel="stylesheet" href="style.css?v=lock-trip">
+  <script type="module" src="app.js?v=lock-trip"></script>
 </head>
 <body>
   <header class="top">
@@ -22,7 +22,7 @@
       <p id="last-release" class="release-status" role="status">No lock release recorded</p>
       <p id="door-status" class="door-status" role="status" hidden></p>
       <div class="cabinet-stage">
-        <div class="metal-cabinet">
+        <div id="cabinet" class="metal-cabinet" data-power="true">
           <div class="service-hatch">
             <div id="controller-deck" class="controller-deck" hidden></div>
             <button id="service-toggle" class="hatch-cover" type="button" aria-expanded="false" aria-controls="controller-deck">
@@ -34,8 +34,9 @@
             <div id="power-panel" class="power-panel" data-on="true" role="status">
               <span class="power-lamp" aria-hidden="true"></span>
               <strong id="power-status">Power supplies on</strong>
-              <span id="open-count">0 doors open</span>
+              <span id="active-lock-count">0 locks energised</span>
             </div>
+            <button id="restore-power" type="button" hidden>Restore power</button>
           </div>
         </div>
       </div>

@@ -26,26 +26,52 @@ test('a bay opens only with its coil active, closes after LC, and preserves othe
   assert.equal(locker.command('ISB#A'), '<A>Ex(BIN):00000000:00000000~\n\r');
 });
 
-test('the fifth open door cuts cabinet-wide coil power until the count returns to four', () => {
+test('five open doors stay powered when each lock is released separately', () => {
   const locker = new Locker();
-  for (const [index, board] of [...boards].entries()) {
-    assert.equal(locker.command('LM0#' + board), '');
+  for (const board of boards) {
+    locker.command('LM0#' + board);
     assert.equal(locker.move(board, 0), true);
-    assert.equal(locker.openCount, index + 1);
-    assert.equal(locker.powerOn, index < 4);
+    assert.equal(locker.activeLockCount, 1);
+    locker.command('LC');
   }
-  assert.equal(locker.command('ISB#C'), '<C>Ex(BIN):00000000:00000001\n\r');
-  locker.command('LM1#A');
-  assert.equal(locker.command('LRS#A'), '<A>Lock Word:0000000000000011~\n\r');
-  assert.equal(locker.coilActive('A', 1), false);
-  assert.equal(locker.move('A', 1), false);
-  assert.equal(locker.openCount, 5);
-  assert.equal(locker.move('E', 0), true);
-  assert.equal(locker.openCount, 4);
   assert.equal(locker.powerOn, true);
-  assert.equal(locker.coilActive('A', 1), true);
+  assert.equal(locker.command('ISB#C'), '<C>Ex(BIN):00000000:00000001\n\r');
+});
+
+test('the fifth energised lock cuts coil power and silences serial until power is restored', () => {
+  let now = 0;
+  const locker = new Locker(() => now);
+  locker.command('HB1');
+  locker.command('CM!#E');
+  for (const board of 'ABCD') locker.command('LM0#' + board);
+  assert.equal(locker.move('A', 0), true);
+  assert.equal(locker.move('B', 0), true);
+  locker.command('LM0#D');
+  assert.equal(locker.activeLockCount, 4);
+  assert.equal(locker.powerOn, true);
+  assert.equal(locker.command('LA0#E'), '');
+  assert.equal(locker.powerOn, false);
+  assert.equal(locker.tripCount, 5);
+  assert.equal(locker.activeLockCount, 0);
+  assert.equal(locker.coilActive('A', 0), false);
+  assert.equal(locker.events.at(-1).kind, 'POWER');
+  const eventCount = locker.events.length;
+  now = 6000;
+  assert.equal(locker.command('ISB#A'), '');
+  assert.equal(locker.command('LC'), '');
+  assert.equal(locker.tick(), '');
+  assert.equal(locker.events.length, eventCount);
+  assert.equal(locker.move('B', 0), true);
+  assert.equal(locker.powerOn, false);
+  locker.restorePower();
+  assert.equal(locker.powerOn, true);
+  assert.equal(locker.tick(), '');
+  assert.equal(locker.command('LRS#A'), '<A>Lock Word:0000000000000000~\n\r');
+  assert.equal(locker.command('ISB#A'), '<A>Ex(BIN):00000000:00000001~\n\r');
+  assert.equal(locker.command('ISB#B'), '<B>Ex(BIN):00000000:00000000~\n\r');
+  assert.equal(locker.command('LM1#E'), '');
   assert.deepEqual(locker.events.filter(event => event.kind === 'POWER').map(event => event.message), [
-    'Power supplies off · 5 doors open', 'Power supplies restored · 4 doors open',
+    'Power supplies off · 5 locks energised · serial offline', 'Power supplies restored · serial online',
   ]);
 });
 

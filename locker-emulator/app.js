@@ -1,4 +1,4 @@
-import {Locker, SerialFrames, boards, bays, openDoorLimit} from './model.js?v=power';
+import {Locker, SerialFrames, boards, bays} from './model.js?v=lock-trip';
 
 const el = id => document.getElementById(id);
 const connectButton = el('connect');
@@ -68,7 +68,7 @@ class Pico {
             this.ready = true;
           } else if (this.ready && line === '!write') {
             throw Error('The Pico could not deliver a reply. Reconnect both apps.');
-          } else if (this.ready && /^>(?:[\da-f]{2})+$/i.test(line)) {
+          } else if (this.ready && locker.powerOn && /^>(?:[\da-f]{2})+$/i.test(line)) {
             const bytes = line.slice(1).match(/../g);
             const data = String.fromCharCode(...bytes.map(byte => parseInt(byte, 16)));
             for (const frame of this.frames.feed(data)) {
@@ -89,10 +89,11 @@ class Pico {
   }
 
   writeReply(reply) {
-    if (!reply || this.closing) return;
+    if (!reply || this.closing || !locker.powerOn) return;
+    const frames = this.frames;
     this.outgoing = this.outgoing.then(async () => {
-      if (this.closing) return;
       for (let offset = 0; offset < reply.length; offset += 64) {
+        if (this.closing || !locker.powerOn || frames !== this.frames) return;
         const hex = Array.from(reply.slice(offset, offset + 64), byte => byte.charCodeAt(0).toString(16).padStart(2, '0')).join('');
         await this.writer.write(encoder.encode('<' + hex + '\n'));
       }
@@ -192,12 +193,17 @@ function render() {
   el('connection').textContent = bridge ? 'Pico connected' : opening ? 'Connecting' : 'Pico disconnected';
   renderTrace();
   const power = el('power-panel');
+  el('cabinet').dataset.power = locker.powerOn;
   const status = locker.powerOn ? 'Power supplies on' : 'Power supplies off';
-  const count = locker.openCount + (locker.openCount === 1 ? ' door open' : ' doors open')
-    + (locker.powerOn ? '' : ' · limit ' + openDoorLimit);
+  const active = locker.activeLockCount;
+  const count = locker.powerOn
+    ? active + (active === 1 ? ' lock energised' : ' locks energised')
+    : locker.tripCount + ' locks at cutoff · serial offline';
   power.dataset.on = locker.powerOn;
   if (el('power-status').textContent !== status) el('power-status').textContent = status;
-  if (el('open-count').textContent !== count) el('open-count').textContent = count;
+  if (el('active-lock-count').textContent !== count) el('active-lock-count').textContent = count;
+  el('restore-power').hidden = locker.powerOn;
+  el('restore-power').disabled = !bridge;
   const release = el('last-release');
   const label = lastRelease
     ? 'Last release request · Board ' + lastRelease.board + ', door ' + (lastRelease.bay + 1)
@@ -247,7 +253,7 @@ function makeBay(address, code, index) {
       if (!locker.move(address, index)) {
         status.textContent = locker.powerOn
           ? 'Board ' + address + ', door ' + (index + 1) + ' is locked'
-          : 'Power supplies off. Close a door to restore power.';
+          : 'Power supplies off. Restore power to release a door.';
       }
     }
     status.hidden = !status.textContent;
@@ -288,5 +294,12 @@ el('service-toggle').addEventListener('click', () => {
   el('controller-deck').hidden = expanded;
 });
 connectButton.addEventListener('click', connect);
+el('restore-power').addEventListener('click', () => {
+  bridge.frames = new SerialFrames();
+  bridge.pending = '';
+  locker.restorePower();
+  el('door-status').hidden = true;
+  render();
+});
 if (!navigator.serial) help.textContent = 'Open this page in desktop Chrome or Edge with serial access enabled.';
 render();

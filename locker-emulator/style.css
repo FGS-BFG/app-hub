@@ -74,7 +74,8 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
 }
 .power-lamp { width: 8px; height: 8px; border-radius: 50%; background: #21865f; }
 .power-panel strong { text-transform: uppercase; letter-spacing: .025em; }
-#open-count { grid-column: 2; }
+#active-lock-count { grid-column: 2; }
+#restore-power { margin-top: 4px; padding: 3px 8px; font-size: .72rem; }
 .power-panel[data-on=false] { background: #6b1b24; color: #fff3f0; }
 .power-panel[data-on=false] .power-lamp { background: #ff8e7f; box-shadow: 0 0 6px #ff8e7f; }
 .controller-deck { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--module-gap); padding: 8px 4px 6px; background: linear-gradient(#333e3b, #5a6861); }
@@ -123,7 +124,7 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
   background: #f9f9f0; box-shadow: inset 0 1px 0 white, 0 2px 2px #575f536e;
 }
 .door-lamp { position: absolute; inset: auto 1px 1px; height: 2px; pointer-events: none; }
-.bay[data-open=true] .door-lamp { z-index: 1; background: #f44c43; box-shadow: 0 -2px 6px 1px #ed302dcc; }
+.metal-cabinet[data-power=true] .bay[data-open=true] .door-lamp { z-index: 1; background: #f44c43; box-shadow: 0 -2px 6px 1px #ed302dcc; }
 .bay[data-active=true]::after { content: ""; position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 100%; background: #ffb040; box-shadow: 0 0 3px #7f4408; }
 .bay[data-recent=true] { outline: 2px solid #d78a24; outline-offset: -3px; }
 .door-status { margin: 0 0 10px; color: #783c10; }
