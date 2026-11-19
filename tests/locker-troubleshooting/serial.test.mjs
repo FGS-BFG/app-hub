@@ -283,6 +283,15 @@ test('master reset writes only RST C and records that reset completion is unconf
   assert.equal(transport.busy, false);
 });
 
+test('client reset permissions allow only fitted boards and record complete writes', async t => {
+  const {transport, port, events} = await opened(t, {}, {masterBoard:'B', resetBoards:['A','B']});
+  await assert.rejects(transport.resetBoard('C'), isCode('INVALID_COMMAND'));
+  await transport.resetBoard('A');
+  await transport.resetMaster();
+  assert.deepEqual(port.commands, ['RST#A\r','RST#B\r']);
+  assert.deepEqual(events.filter(event => event.type === 'reset-written').map(event => event.board), ['A','B']);
+});
+
 test('the master reset banner is an acknowledgement rather than proof the reset completed', async t => {
   const {transport, port} = await opened(t, {onCommand(command, p) {
     p.send('<C>SYSTEM_Reset in 5 seconds...\r\n');

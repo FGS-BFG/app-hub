@@ -29,11 +29,16 @@ export class SerialError extends Error {
 
 export class SerialTransport {
   constructor(port, {onEvent, onState, timeout = 1500, startupDelay = 2000,
-    charDelay = 10, quietDelay = 100, resetDelay = 6000, masterBoard = 'C'} = {}) {
+    charDelay = 10, quietDelay = 100, resetDelay = 6000, masterBoard = 'C', resetBoards = [masterBoard]} = {}) {
     if (typeof masterBoard !== 'string' || !/^[A-E]$/.test(masterBoard)) {
       throw new SerialError('INVALID_COMMAND', 'Choose one master board letter from A to E.');
     }
     Object.defineProperty(this, 'masterBoard', {value: masterBoard, enumerable: true});
+    if (!Array.isArray(resetBoards) || !resetBoards.includes(masterBoard) ||
+        resetBoards.some(board => typeof board !== 'string' || !/^[A-E]$/.test(board))) {
+      throw new SerialError('INVALID_COMMAND', 'Reset targets must be board letters A to E and include the master.');
+    }
+    Object.defineProperty(this, 'resetBoards', {value: Object.freeze([...new Set(resetBoards)])});
     this.port = port;
     this.connected = false;
     this.busy = false;
@@ -268,8 +273,11 @@ export class SerialTransport {
   }
 
   _begin(command, kind, board) {
-    if (typeof command !== 'string' || (!/^ISB#[A-E]$/.test(command) && command !== 'RST#' + this.masterBoard)) {
-      throw new SerialError('INVALID_COMMAND', `Only ISB#A–E and RST#${this.masterBoard} are permitted.`);
+    const query = kind === 'query' && typeof board === 'string' && /^[A-E]$/.test(board) && command === 'ISB#' + board;
+    const reset = kind === 'reset' && this.resetBoards.includes(board) && command === 'RST#' + board;
+    if (!query && !reset) {
+      const resets = this.resetBoards.map(address => 'RST#' + address).join(', ');
+      throw new SerialError('INVALID_COMMAND', `Only ISB#A–E and ${resets} are permitted.`);
     }
     return this._reserve(command, kind, board);
   }
@@ -551,12 +559,17 @@ export class SerialTransport {
     }
   }
 
-  async resetMaster() {
-    const active = this._begin('RST#' + this.masterBoard, 'reset', this.masterBoard);
+  resetMaster() {
+    return this.resetBoard(this.masterBoard);
+  }
+
+  async resetBoard(board) {
+    const active = this._begin('RST#' + board, 'reset', board);
     try {
       await this._prepare(active);
       await this._write(active);
-      await this._pause(this.resetDelay, active);
+      this._event('reset-written', {command: active.command, board});
+      await this._pause(board === this.masterBoard ? this.resetDelay : Math.min(200, this.resetDelay), active);
       return {raw: active.raw, at: now(), acknowledged: active.acknowledged, confirmed: false};
     } catch (error) {
       this._event('error', {code: error.code, command: active.command, raw: error.raw || active.raw, message: error.message});
