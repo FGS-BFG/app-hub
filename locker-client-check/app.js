@@ -125,9 +125,33 @@ function newPass(kind) {
   passList.prepend(section);
   byId('results').hidden = false;
   byId('count').textContent = 'Checking ' + layout.boards.length + ' boards';
+  byId('test-outcome').hidden = true;
   const pass = {kind, rows: [], section, body, summary};
   passes.push(pass);
   return pass;
+}
+
+function completePass(pass) {
+  const missing = pass.rows.filter(row => row.result === 'timeout' || row.result === 'error');
+  const skipped = pass.rows.filter(row => row.result === 'skipped');
+  const replied = pass.rows.filter(row => row.result === 'reply').length;
+  const expected = layout.boards.length;
+  const verdict = replied === expected ? 'PASS' : 'FAIL';
+  const boardNames = rows => (rows.length === 1 ? 'Board ' : 'Boards ') + rows.map(row => row.board).join(', ');
+
+  const details = [replied + ' of ' + expected + ' expected boards replied.'];
+  if (missing.length) details.push(boardNames(missing) + ' did not reply with valid data.');
+  if (skipped.length) details.push(boardNames(skipped) + ' could not be checked.');
+  const description = details.join(' ');
+  pass.outcome = {verdict, description};
+  pass.summary.textContent = labels[pass.kind] + ' · ' + verdict + ' · ' + replied + ' of ' + expected + ' replied';
+  const outcome = byId('test-outcome');
+  outcome.dataset.verdict = verdict;
+  byId('outcome-verdict').textContent = verdict;
+  byId('outcome-description').textContent = description;
+  outcome.hidden = false;
+  log('Test result', labels[pass.kind] + ' · ' + verdict + ' · ' + description);
+  return verdict === 'PASS';
 }
 
 async function run(action) {
@@ -241,9 +265,7 @@ async function check(kind) {
       recordResult(pass, board, result, error.message);
     }
   }
-  const replied = pass.rows.filter(row => row.result === 'reply').length;
-  pass.summary.textContent += ' · ' + replied + ' of ' + layout.boards.length + ' replied';
-  confirmed = replied === layout.boards.length;
+  confirmed = completePass(pass);
   if (confirmed) {
     prompt('All boards replied', 'Add any notes. Select Save and finish to close the test and download the report.', 'review');
   } else if (kind === 'initial') {
@@ -333,15 +355,18 @@ function confirmPowerOn() {
 function downloadReport(suffix) {
   log('Action', 'Requested report download.');
   const saved = new Date();
+  const latest = passes.findLast(pass => pass.outcome);
   const report = [
     'FGS Locker Connection Check',
     'Started ' + startedAt.toISOString(),
     'Report generated ' + saved.toISOString(),
+    'Test result: ' + (latest ? latest.outcome.verdict + ' · ' + labels[latest.kind] : 'Not completed'),
+    ...(latest ? [latest.outcome.description] : []),
     'Locker ' + layout.capacity + ' bays | Master ' + layout.master + ' | Boards ' + layout.boards.join(', '),
     'Notes', notes.value.trim() || 'None recorded.',
     '',
     ...passes.flatMap(pass => [
-      labels[pass.kind],
+      labels[pass.kind] + ' · ' + (pass.outcome?.verdict ?? 'Not completed'),
       ...pass.rows.map(row => row.board + ' · ' + results[row.result] + (row.detail ? ' · ' + row.detail : '')),
       '',
     ]),

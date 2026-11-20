@@ -85,3 +85,18 @@ summary { color: #174541; cursor: pointer; font-weight: 600; }
 .activity { padding: 0 0 0 1.5rem; max-height: 20rem; overflow: auto; color: #3f5555; font-size: .84rem; }
 .activity li { padding: .3rem 0; overflow-wrap: anywhere; }
 .activity time { font-weight: 650; margin-right: .5rem; }
+
+.test-outcome {
+  margin-top: 1rem;
+  padding: .8rem 1rem;
+  border: 1px solid var(--outcome-border);
+  border-left-width: 4px;
+  border-radius: .55rem;
+  background: var(--outcome-surface);
+  color: var(--outcome-text);
+}
+.test-outcome[data-verdict="PASS"] { --outcome-border: #43836a; --outcome-surface: #eaf5ee; --outcome-text: #164f38; }
+.test-outcome[data-verdict="FAIL"] { --outcome-border: #b76053; --outcome-surface: #fdf0ec; --outcome-text: #762c23; }
+.test-outcome h3 { display: flex; align-items: baseline; flex-wrap: wrap; gap: .5rem; margin: 0; font-size: 1rem; }
+.test-outcome strong { font-size: 1.22rem; letter-spacing: .02em; }
+.test-outcome p { margin: .25rem 0 0; font-size: .9rem; }

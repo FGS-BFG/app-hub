@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Locker Connection Check · FGS</title>
-  <link rel="stylesheet" href="style.css?v=offline-download">
+  <link rel="stylesheet" href="style.css?v=test-result">
 </head>
 <body>
   <header>
@@ -65,6 +65,10 @@
         <p id="count" class="muted"></p>
       </div>
       <div id="passes"></div>
+      <div id="test-outcome" class="test-outcome" role="status" aria-atomic="true" hidden>
+        <h3>Test result <strong id="outcome-verdict"></strong></h3>
+        <p id="outcome-description"></p>
+      </div>
     </section>
     <section class="panel" aria-labelledby="report-title">
       <h2 id="report-title">Report</h2>
@@ -81,6 +85,6 @@
       </details>
     </section>
   </main>
-  <script type="module" src="app.js?v=recovery-photo"></script>
+  <script type="module" src="app.js?v=test-result"></script>
 </body>
 </html>
