@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCI 304 Locker Emulator</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=four-across">
-  <script type="module" src="app.js?v=cabinet-monitors"></script>
+  <link rel="stylesheet" href="style.css?v=toolkit-com">
+  <script type="module" src="app.js?v=toolkit-com"></script>
 </head>
 <body>
   <header class="top">
@@ -21,7 +21,7 @@
         <div><h2 id="connection-title">Locker connection</h2><p id="cabinet-capacity"></p></div>
         <button id="connect" type="button">Connect Pico</button>
       </div>
-      <p id="connection-help" class="connection-help" role="status">Plug in the Pico. Connect its cabinet port here and use its other COM port in the locker app.</p>
+      <p id="connection-help" class="connection-help" role="status">Connect the browser bridge COM port. Each cabinet uses a separate locker COM port in the desktop app.</p>
     </section>
     <div id="cabinet-grid" class="cabinet-grid"></div>
     <div class="legend" aria-label="Door indicators"><span class="legend-closed">Closed</span><span class="legend-open">Open</span><span class="legend-driven">Output active</span><span class="legend-release">Last release</span></div>
@@ -29,7 +29,9 @@
   <template id="cabinet-template">
     <article class="cabinet-column">
       <section class="panel cabinet">
-        <div class="panel-head"><h2 data-part="title">Locker cabinet</h2></div>
+        <div class="panel-head">
+          <div><h2 data-part="title">Locker cabinet</h2><p data-part="connection"></p></div>
+        </div>
         <p data-part="last-release" class="release-status" role="status">No lock release recorded</p>
         <p data-part="door-status" class="door-status" role="status" hidden></p>
         <div class="cabinet-stage">

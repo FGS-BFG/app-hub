@@ -32,9 +32,9 @@ After editing the client app or its shared serial code, run `node locker-client-
 
 ## MCI 304 Locker Emulator
 
-Open the [locker emulator](https://fgs-bfg.github.io/app-hub/locker-emulator/) in desktop Chrome or Edge. Plug in a Pico running the MCI304 USB bridge and click **Connect Pico**. Choose its cabinet COM interface. Select the other Pico COM interface in the locker operation app. On a new PC, the assigned COM numbers can change. The cabinet checks the bridge protocol before accepting a port.
+Open the [locker emulator](https://fgs-bfg.github.io/app-hub/locker-emulator/) in desktop Chrome or Edge. Click **Connect Pico** and select the Tool Kit's browser bridge COM port. Select the corresponding Locker 1–4 COM ports in the desktop locker app. Windows COM numbers can change between PCs.
 
-The Pico OLED submenu opens the emulator with a `cabinets` URL parameter from 1 to 4. Each cabinet adds 80 bays. Cabinet controller addresses are A-E, F-J, K-O, and P-T, with C as the shared master. All cabinets use the same Pico connection and simulated power cutoff. The browser shows every configured cabinet with its own serial monitor. Addressed traffic appears with the target cabinet, and shared bus events appear in every monitor.
+The Pico OLED menu opens the emulator with a `cabinets` URL parameter from 1 to 4. Every cabinet has 80 bays on boards A-E, with C as master. The Tool Kit exposes one browser bridge COM port and four independent locker COM ports. Each cabinet keeps its own serial monitor and power state. An older two-port Pico bridge still supports the single-cabinet preset. RGB COM mode uses Locker 1's COM port and its own browser tab; disconnect the locker emulator before connecting RGB.
 
 Keep the emulator open while the locker app is connected. It models board C as master, with 1 for an open door and 0 for a closed door. Click an energised door to open it and click it again to close it. The monitor shows the serial commands, replies and door events. The simulator runs in the browser and stores its state for the current connection.
 

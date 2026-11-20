@@ -1,32 +1,27 @@
-import {Locker, SerialFrames, bays} from './model.js?v=cabinet-monitors';
+import {Locker, SerialFrames, boards, bays} from './model.js?v=toolkit-com';
 
 const el = id => document.getElementById(id);
-const connectButton = el('connect');
 const help = el('connection-help');
 const encoder = new TextEncoder();
 const selectedCount = new URLSearchParams(location.search).get('cabinets');
 const cabinetCount = /^[1-4]$/.test(selectedCount ?? '') ? Number(selectedCount) : 1;
-const createLocker = () => new Locker(undefined, undefined, cabinetCount);
-let locker = createLocker();
+const connectButton = el('connect');
+const bridgeFilters = [
+  {usbVendorId: 0xcafe, usbProductId: 0x4065},
+  {usbVendorId: 0x239a, usbProductId: 0x80f4},
+];
 let bridge = null;
 let opening = false;
-let renderedEvent = null;
-let paintPending = false;
-
-function update() {
-  if (!paintPending) {
-    paintPending = true;
-    requestAnimationFrame(() => {
-      paintPending = false;
-      render();
-    });
-  }
-}
 
 class Pico {
-  constructor(port) {
+  constructor(port, panels) {
     this.port = port;
-    this.frames = new SerialFrames();
+    this.channels = panels.map((panel, index) => ({
+      number: index + 1,
+      panel,
+      locker: new Locker(),
+      frames: new SerialFrames(),
+    }));
     this.pending = '';
     this.outgoing = Promise.resolve();
   }
@@ -38,21 +33,29 @@ class Pico {
     this.reader = this.port.readable.getReader();
     this.writer = this.port.writable.getWriter();
     this.pump = this.read();
-    try {
-      for (let attempt = 0; attempt < 5 && !this.ready; attempt++) {
-        await this.writer.write(encoder.encode('\n?\n'));
-        await new Promise(resolve => setTimeout(resolve, 250));
+    const negotiate = async (command, marker) => {
+      this.expectedMarker = marker;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await this.writer.write(encoder.encode(command));
+        await new Promise(resolve => setTimeout(resolve, 175));
         if (this.failure) throw this.failure;
+        if (this.mode) return true;
       }
-      if (!this.ready) throw Error('The Pico did not answer. Choose the other Pico COM port or close any cabinet already using it.');
-      this.timer = setInterval(() => {
-        this.writeReply(locker.tick());
-        if (locker.events.at(-1) !== renderedEvent) update();
-      }, 30);
-    } catch (error) {
-      await this.close();
-      throw error;
+      return false;
+    };
+    if (!await negotiate('\n?multi\n', 'MCI304-USB-4')
+        && !await negotiate('\n?\n', 'MCI304-USB-1')) {
+      throw Error('The Pico did not answer. Select the browser bridge COM port.');
     }
+    if (this.mode === 'legacy' && this.channels.length > 1) {
+      throw Error('This Pico firmware provides one locker COM port. Use the multi-COM Tool Kit firmware for this preset.');
+    }
+    this.timer = setInterval(() => {
+      for (const channel of this.channels) {
+        this.writeReply(channel, channel.locker.tick());
+        if (channel.locker.events.at(-1) !== channel.panel.renderedEvent) updatePanel(channel.panel);
+      }
+    }, 30);
   }
 
   async read() {
@@ -66,18 +69,7 @@ class Pico {
         while ((end = this.pending.indexOf('\n')) !== -1) {
           const line = this.pending.slice(0, end).replace(/\r$/, '');
           this.pending = this.pending.slice(end + 1);
-          if (line === 'MCI304-USB-1') {
-            this.ready = true;
-          } else if (this.ready && line === '!write') {
-            throw Error('The Pico could not deliver a reply. Reconnect both apps.');
-          } else if (this.ready && locker.powerOn && /^>(?:[\da-f]{2})+$/i.test(line)) {
-            const bytes = line.slice(1).match(/../g);
-            const data = String.fromCharCode(...bytes.map(byte => parseInt(byte, 16)));
-            for (const frame of this.frames.feed(data)) {
-              this.writeReply(locker.tick() + locker.command(frame));
-              update();
-            }
-          }
+          this.readLine(line);
         }
         if (this.pending.length > 1024) this.pending = '';
       }
@@ -90,14 +82,39 @@ class Pico {
     }
   }
 
-  writeReply(reply) {
-    if (!reply || this.closing || !locker.powerOn) return;
-    const frames = this.frames;
+  readLine(line) {
+    if (!this.mode && line === this.expectedMarker) {
+      this.mode = line === 'MCI304-USB-4' ? 'multi' : 'legacy';
+      return;
+    }
+    if (!this.mode) return;
+    const failure = /^!write([1-4])?$/.exec(line);
+    if (failure && (this.mode === 'multi') === Boolean(failure[1])) {
+      const channel = this.channels[Number(failure[1] || 1) - 1];
+      channel?.locker.event('FAULT', 'The locker app could not receive this reply. Check its COM port.');
+      if (channel) updatePanel(channel.panel);
+      return;
+    }
+    const match = /^>(?:([1-4]):)?((?:[\da-f]{2})+)$/i.exec(line);
+    if (!match || (this.mode === 'multi') !== Boolean(match[1])) return;
+    const channel = this.channels[Number(match[1] || 1) - 1];
+    if (!channel?.locker.powerOn) return;
+    const data = String.fromCharCode(...match[2].match(/../g).map(byte => parseInt(byte, 16)));
+    for (const frame of channel.frames.feed(data)) {
+      this.writeReply(channel, channel.locker.tick() + channel.locker.command(frame));
+      updatePanel(channel.panel);
+    }
+  }
+
+  writeReply(channel, reply) {
+    if (!reply || this.closing || !channel.locker.powerOn) return;
+    const frames = channel.frames;
+    const prefix = this.mode === 'multi' ? '<' + channel.number + ':' : '<';
     this.outgoing = this.outgoing.then(async () => {
       for (let offset = 0; offset < reply.length; offset += 64) {
-        if (this.closing || !locker.powerOn || frames !== this.frames) return;
+        if (this.closing || !channel.locker.powerOn || frames !== channel.frames) return;
         const hex = Array.from(reply.slice(offset, offset + 64), byte => byte.charCodeAt(0).toString(16).padStart(2, '0')).join('');
-        await this.writer.write(encoder.encode('<' + hex + '\n'));
+        await this.writer.write(encoder.encode(prefix + hex + '\n'));
       }
     }).catch(error => {
       if (!this.closing && bridge === this) void disconnect(error.message);
@@ -119,43 +136,63 @@ class Pico {
   }
 }
 
-async function disconnect(message = 'Disconnected. Connect the Pico to restart the cabinet.') {
+async function disconnect(message = 'Pico disconnected.') {
+  if (opening) return;
+  opening = true;
   const current = bridge;
   bridge = null;
-  opening = true;
-  await current?.close();
-  help.textContent = message;
-  opening = false;
-  render();
+  for (const panel of panels) panel.channel = null;
+  renderConnection();
+  try {
+    await current?.close();
+  } finally {
+    help.textContent = message;
+    opening = false;
+    renderConnection();
+    panels.forEach(renderCabinet);
+  }
 }
 
 async function connect() {
+  if (opening) return;
   if (bridge) {
     await disconnect();
     return;
   }
-  if (opening) return;
   opening = true;
-  render();
+  renderConnection();
   let candidate;
   try {
-    const port = await navigator.serial.requestPort({filters: [{usbVendorId: 0x239a, usbProductId: 0x80f4}]});
-    candidate = new Pico(port);
-    locker = createLocker();
-    for (const panel of panels) {
+    const port = await navigator.serial.requestPort({filters: bridgeFilters});
+    candidate = new Pico(port, panels);
+    await candidate.open();
+    if (candidate.failure) throw candidate.failure;
+    for (const channel of candidate.channels) {
+      const {panel, locker} = channel;
+      panel.channel = channel;
+      panel.locker = locker;
       panel.lastRelease = null;
       panel.parts['door-status'].hidden = true;
     }
-    await candidate.open();
     bridge = candidate;
-    help.textContent = 'Use the other Pico COM port in the locker app. Click an energised door to open it. Click again to close it.';
+    help.textContent = 'In the locker app, select the corresponding locker COM port for each cabinet.';
   } catch (error) {
     await candidate?.close();
     if (error.name !== 'NotFoundError') help.textContent = error.message;
   } finally {
     opening = false;
-    render();
+    renderConnection();
+    panels.forEach(renderCabinet);
   }
+}
+
+function updatePanel(panel) {
+  if (panel.paintPending) return;
+  panel.paintPending = true;
+  requestAnimationFrame(() => {
+    panel.paintPending = false;
+    renderCabinet(panel);
+  });
 }
 
 function renderTrace(panel, events) {
@@ -191,29 +228,27 @@ function renderTrace(panel, events) {
   trace.scrollTop = follow ? trace.scrollHeight : top;
 }
 
-function render() {
+function renderConnection() {
   connectButton.disabled = opening || !navigator.serial;
-  connectButton.textContent = bridge ? 'Disconnect' : 'Connect Pico';
+  connectButton.textContent = bridge ? 'Disconnect Pico' : 'Connect Pico';
   el('connection').textContent = bridge ? 'Pico connected' : opening ? 'Connecting' : 'Pico disconnected';
-  renderedEvent = locker.events.at(-1);
+}
+
+function renderCabinet(panel) {
+  const {parts, modules, locker, channel} = panel;
+  renderTrace(panel, locker.events);
+  const {lastRelease} = panel;
   const active = locker.activeLockCount;
   const status = locker.powerOn ? 'Power supplies on' : 'Power supplies off';
   const count = locker.powerOn
     ? active + (active === 1 ? ' lock energised' : ' locks energised')
     : locker.tripCount + ' locks at cutoff · serial offline';
-  panels.forEach((panel, index) => {
-    renderTrace(panel, locker.cabinetEvents[index]);
-    renderCabinet(panel, status, count);
-  });
-}
-
-function renderCabinet({parts, modules, lastRelease}, status, count) {
   parts.cabinet.dataset.power = locker.powerOn;
   parts['power-panel'].dataset.on = locker.powerOn;
   if (parts['power-status'].textContent !== status) parts['power-status'].textContent = status;
   if (parts['active-lock-count'].textContent !== count) parts['active-lock-count'].textContent = count;
   parts['restore-power'].hidden = locker.powerOn;
-  parts['restore-power'].disabled = !bridge;
+  parts['restore-power'].disabled = !channel;
   const release = parts['last-release'];
   const label = lastRelease
     ? 'Last release request · Board ' + lastRelease.board + ', door ' + (lastRelease.bay + 1)
@@ -236,7 +271,7 @@ function renderCabinet({parts, modules, lastRelease}, status, count) {
   }
 }
 
-function makeBay(address, code, index, status) {
+function makeBay(address, code, index, panel) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'bay';
@@ -254,11 +289,13 @@ function makeBay(address, code, index, status) {
   face.append(window, pull);
   button.append(lamp, face);
   button.addEventListener('click', () => {
+    const {parts, channel, locker} = panel;
+    const status = parts['door-status'];
     status.textContent = '';
-    if (!bridge) {
+    if (!bridge || !channel) {
       status.textContent = 'Connect the Pico first';
     } else {
-      bridge.writeReply(locker.tick());
+      bridge.writeReply(channel, locker.tick());
       if (!locker.move(address, index)) {
         status.textContent = locker.powerOn
           ? 'Board ' + address + ', door ' + (index + 1) + ' is locked'
@@ -266,13 +303,14 @@ function makeBay(address, code, index, status) {
       }
     }
     status.hidden = !status.textContent;
-    render();
+    renderCabinet(panel);
   });
   return button;
 }
 
-function makeModule(address, parts) {
-  const buttons = Array.from(bays, (code, index) => makeBay(address, code, index, parts['door-status']));
+function makeModule(address, panel) {
+  const {parts} = panel;
+  const buttons = Array.from(bays, (code, index) => makeBay(address, code, index, panel));
   const module = document.createElement('div');
   module.className = 'module';
   const label = document.createElement('div');
@@ -295,13 +333,14 @@ function makeModule(address, parts) {
   return [address, buttons];
 }
 
-function makeCabinet(group, index) {
+function makeCabinet(index) {
   const column = el('cabinet-template').content.firstElementChild.cloneNode(true);
   const parts = Object.fromEntries(Array.from(column.querySelectorAll('[data-part]'),
     element => [element.dataset.part, element]));
   const suffix = index + 1;
   const title = cabinetCount === 1 ? 'Locker cabinet' : 'Cabinet ' + suffix;
-  parts.title.textContent = title + ' · Boards ' + group[0] + '–' + group.at(-1);
+  parts.title.textContent = title;
+  parts.connection.textContent = 'Locker port ' + suffix + ' · Boards A–E';
   parts.title.id = 'cabinet-title-' + suffix;
   column.querySelector('.cabinet').setAttribute('aria-labelledby', parts.title.id);
 
@@ -319,21 +358,23 @@ function makeCabinet(group, index) {
     toggle.firstElementChild.textContent = expanded ? 'Open service hatch' : 'Close service hatch';
     deck.hidden = expanded;
   });
-  parts['restore-power'].addEventListener('click', () => {
-    if (!bridge || locker.powerOn) return;
-    bridge.frames = new SerialFrames();
-    bridge.pending = '';
-    locker.restorePower();
-    for (const panel of panels) panel.parts['door-status'].hidden = true;
-    render();
-  });
-
   const panel = {
     parts,
-    modules: Object.fromEntries(Array.from(group, address => makeModule(address, parts))),
+    locker: new Locker(),
+    channel: null,
     lastRelease: null,
     renderedEvent: null,
+    paintPending: false,
   };
+  panel.modules = Object.fromEntries(Array.from(boards, address => makeModule(address, panel)));
+  parts['restore-power'].addEventListener('click', () => {
+    const {channel, locker} = panel;
+    if (!channel || locker.powerOn) return;
+    channel.frames = new SerialFrames();
+    locker.restorePower();
+    parts['door-status'].hidden = true;
+    renderCabinet(panel);
+  });
   el('cabinet-grid').append(column);
   return panel;
 }
@@ -342,7 +383,8 @@ el('workspace').dataset.cabinets = cabinetCount;
 el('cabinet-capacity').textContent = cabinetCount === 1
   ? '1 cabinet · 80 bays'
   : cabinetCount + ' cabinets · ' + cabinetCount * 80 + ' bays';
-const panels = locker.cabinets.map(makeCabinet);
-connectButton.addEventListener('click', connect);
+const panels = Array.from({length: cabinetCount}, (_, index) => makeCabinet(index));
 if (!navigator.serial) help.textContent = 'Open this page in desktop Chrome or Edge with serial access enabled.';
-render();
+connectButton.addEventListener('click', () => void connect());
+renderConnection();
+panels.forEach(renderCabinet);

@@ -100,51 +100,29 @@ test('global clear, paired commands, timer expiry and reset responses follow the
   assert.match(locker.tick(), /<C>Firmware : MCi_304-Fw1\.5\.9fs\n\r<C>Board  ID : 43/);
 });
 
-test('cabinet presets add independent 80-bay groups on the existing serial bus', () => {
-  const groups = ['ABCDE', 'FGHIJ', 'KLMNO', 'PQRST'];
-  for (let count = 1; count <= 4; count++) {
-    const locker = new Locker(undefined, undefined, count);
-    assert.deepEqual(locker.cabinets, groups.slice(0, count));
-    assert.equal(Object.keys(locker.boards).length, 5 * count);
-    assert.match(locker.events[0].message, new RegExp('All ' + 80 * count + ' doors'));
-    assert.match(locker.command('ISB'), /^<C>/);
-    assert.equal(locker.command('ISB#Z'), '');
-  }
-  const locker = new Locker(undefined, undefined, 4);
-  locker.command('LM0#T');
-  assert.equal(locker.move('T', 0), true);
-  assert.match(locker.command('ISB#T'), /00000001~/);
-  assert.match(locker.command('ISB#A'), /00000000~/);
-  for (const address of 'ABCD') locker.command('LM0#' + address);
-  assert.equal(locker.powerOn, false);
-  locker.restorePower();
-  assert.equal(locker.activeLockCount, 0);
-  assert.match(locker.command('ISB#T'), /00000001~/);
-  assert.deepEqual(new Locker(undefined, undefined, 0).cabinets, ['ABCDE']);
-});
 
-test('cabinet monitors receive their own serial traffic and shared bus events', () => {
+test('cabinets on separate COM links can reuse A-E without sharing state', () => {
   let now = 0;
-  const locker = new Locker(() => now, 'C', 4);
-  const [first, second, third, fourth] = locker.cabinetEvents;
-  locker.command('ISB');
-  locker.command('CM!#T');
-  locker.command('LA0#T');
-  locker.move('T', 0);
-  now = 3000;
-  locker.tick();
-  assert.deepEqual(first.map(event => event.kind), ['SYSTEM', 'TX', 'RX']);
-  assert.deepEqual(second.map(event => event.kind), ['SYSTEM']);
-  assert.deepEqual(third.map(event => event.kind), ['SYSTEM']);
-  assert.ok(fourth.some(event => event.kind === 'TX' && event.message.includes('LA0#T')));
-  assert.ok(fourth.some(event => event.kind === 'DOOR'));
-  assert.ok(fourth.some(event => event.kind === 'RX' && event.message.includes('REMOTE_Lock Done')));
-  locker.command('LC');
-  for (const feed of locker.cabinetEvents) {
-    assert.ok(feed.some(event => event.kind === 'TX' && event.message.startsWith('LC')));
+  const first = new Locker(() => now);
+  const second = new Locker(() => now);
+  for (const cabinet of [first, second]) {
+    assert.deepEqual(Object.keys(cabinet.boards), [...'ABCDE']);
+    assert.match(cabinet.command('GFV'), /^<C>/);
+    assert.equal(cabinet.command('ISB#F'), '');
   }
-  const fourthCount = fourth.length;
-  for (let index = 0; index < 180; index++) locker.command('ISB#A');
-  assert.equal(first.length, 180);
-  assert.equal(fourth.length, fourthCount);
+
+  first.command('CM!#A');
+  first.command('LA0#A');
+  assert.equal(first.move('A', 0), true);
+  assert.match(first.command('ISB#A'), /00000001~/);
+  assert.match(second.command('ISB#A'), /00000000~/);
+  now = 3000;
+  assert.match(first.tick(), /REMOTE_Lock Done/);
+  assert.equal(second.tick(), '');
+  assert.ok(!second.events.some(event => event.message.includes('LA0#A')));
+
+  for (const address of 'ABCDE') first.command('LM0#' + address);
+  assert.equal(first.powerOn, false);
+  assert.equal(second.powerOn, true);
+  assert.match(second.command('ISB#A'), /^<A>/);
 });
