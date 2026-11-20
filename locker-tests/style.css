@@ -1,0 +1,97 @@
+.suite-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .35rem .85rem;
+  font-size: .95rem;
+}
+
+.suite-nav a, .suite-nav [aria-current="page"] {
+  display: inline-block;
+  padding: .35rem 0;
+}
+
+.suite-nav [aria-current="page"] {
+  color: #fff;
+  font-weight: 700;
+}
+
+.suite-nav .suite-status {
+  flex-basis: 100%;
+  margin: 0;
+  color: #ffe3a3;
+}
+
+.suite-status:empty {
+  position: absolute;
+}
+
+.suite-home {
+  box-sizing: border-box;
+  margin: 0;
+  background: #f3f6f5;
+  color: #152b35;
+  font: 1rem/1.55 system-ui, sans-serif;
+}
+
+.suite-home header {
+  padding: 2rem 0;
+  background: #103a3b;
+  color: #fff;
+}
+
+.suite-home header a, .suite-home header p {
+  color: #d2ede5;
+}
+
+.suite-home h1 {
+  margin: .5rem 0 0;
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1.15;
+}
+
+.suite-home header p {
+  margin: .6rem 0 0;
+}
+
+.suite-wrap {
+  width: min(1050px, 100% - 2rem);
+  margin-inline: auto;
+}
+
+.suite-home main {
+  padding-block: 1.5rem 3rem;
+}
+
+.suite-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1rem;
+}
+
+.suite-grid article {
+  display: flex;
+  flex-direction: column;
+  padding: 1.25rem;
+  border: 1px solid #dce7e3;
+  border-radius: .75rem;
+  background: #fff;
+}
+
+.suite-grid h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.suite-grid p {
+  flex: 1;
+  margin: .45rem 0 1rem;
+}
+
+.suite-grid a {
+  align-self: flex-start;
+  padding-block: .2rem;
+  color: #086b58;
+  font-weight: 650;
+  text-underline-offset: .2em;
+}

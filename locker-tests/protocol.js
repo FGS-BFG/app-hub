@@ -1,0 +1,12 @@
+export const codes='0123456789ABCDEF';
+export function parseInput(board, reply){const escaped=String(board);const m=reply.match(new RegExp('<'+escaped+'>[^\\r\\n]*\\(BIN\\):([01]{8}):([01]{8})','i'));if(!m)throw Error('Invalid input reply for board '+board);return m[1]+m[2]}
+export function autoPolarity(words, fallback){const bits=words.join(''), ones=[...bits].filter(x=>x==='1').length, zeros=bits.length-ones;return zeros===0?'bench':zeros>ones?'locker':fallback}
+export function isOpen(bits,index,polarity){if(bits.length!==16||index<0||index>15)throw Error('Invalid input');return bits[15-index]===(polarity==='locker'?'1':'0')}
+export const wait=ms=>new Promise(r=>setTimeout(r,ms));
+export class SerialTransport{
+ constructor(port){this.port=port;this.buffer='';this.reader=null;this.writer=null;this.connected=false;this.queue=Promise.resolve()}
+ async open(){try{await this.port.open({baudRate:9600,dataBits:8,stopBits:1,parity:'none',flowControl:'none'});if(this.port.setSignals)await this.port.setSignals({dataTerminalReady:false,requestToSend:false});this.reader=this.port.readable.getReader();this.writer=this.port.writable.getWriter();this.connected=true;this.pump();await wait(2000);if(!this.connected)throw Error('USB connection closed during startup')}catch(e){await this.close();throw e}}
+ async pump(){try{while(this.connected){const {value,done}=await this.reader.read();if(done)break;if(value)this.buffer+=new TextDecoder().decode(value)}}catch(e){this.error=e}finally{this.connected=false}}
+ command(cmd,pattern,timeout=1500,allowed=()=>true){const operation=async()=>{if(!allowed())throw Error('Command cancelled');if(!this.connected)throw Error('USB connection lost');this.buffer='';for(const c of cmd+'\r'){await this.writer.write(new TextEncoder().encode(c));await wait(10)}const until=Date.now()+timeout;while(Date.now()<until){if(!this.connected)throw Error('USB connection lost');if(/unknown|command error|parameter error|error .+ range/i.test(this.buffer))throw Error('Controller rejected '+cmd+': '+this.buffer.trim());if(pattern&&pattern.test(this.buffer))return this.buffer;if(!pattern&&Date.now()>until-1440)return this.buffer;await wait(10)}throw Error('No valid response to '+cmd)};const p=this.queue.then(operation);this.queue=p.catch(()=>{});return p}
+ async close(){this.connected=false;try{await this.reader?.cancel()}catch{}try{this.reader?.releaseLock()}catch{}try{this.writer?.releaseLock()}catch{}try{await this.port.close()}catch{}}
+}

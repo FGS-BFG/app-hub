@@ -1,7 +1,10 @@
+import {guardSuiteNavigation} from '../locker-tests/navigation.js';
 import {codes,parseInput,autoPolarity,isOpen,wait,SerialTransport} from './protocol.js';
 import {verifyLockClear} from '../locker-lock-clear.js?v=1';
 const $=id=>document.getElementById(id),boards='ABCDE',elements=new Map(),states=new Map(),logEntries=[];
 let device=null,mode='disconnected',ready=false,busy=false,stopping=false,session=0,sensorPolarity='bench',openBits={};
+guardSuiteNavigation(document.querySelector('.suite-nav'), () => mode === 'usb' && (device || busy || stopping),
+  'Disconnect the locker USB before switching modes.');
 for(const board of boards){const label=document.createElement('div');label.textContent=board+(board==='C'?' · MASTER':'');$('labels').append(label);const group=document.createElement('div');group.className='board';group.setAttribute('aria-label','Board '+board);for(let row=0;row<8;row++)for(let col=0;col<2;col++){const index=row+8*col,key=board+':'+index;const door=document.createElement('button');door.className='door unknown';door.disabled=true;door.dataset.key=key;door.innerHTML=`<span class="id">${index+1}</span><span class="window" aria-hidden="true"></span>`;door.onclick=()=>activate(board,index);door.setAttribute('aria-label',`Board ${board}, door ${index+1}: status unknown`);group.append(door);elements.set(key,door);states.set(key,'unknown')}$('cabinet').append(group)}
 function log(message){const line=new Date().toLocaleTimeString()+' · '+message;logEntries.unshift(line);if(logEntries.length>60)logEntries.pop();$('log').replaceChildren(...logEntries.map(x=>{const li=document.createElement('li');li.textContent=x;return li}))}
 function status(message){$('status').textContent=message;log(message)}
