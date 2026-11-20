@@ -67,6 +67,10 @@ export class Locker {
     this.events = [];
     this.powerOn = true;
     this.tripCount = null;
+    this.offlineBoard = null;
+    this.stuckDoor = null;
+    this.replyDelay = 0;
+    this.delayedReplies = [];
     this.event('SYSTEM', 'Cabinet ready. All 80 doors are closed.');
   }
 
@@ -88,6 +92,62 @@ export class Locker {
     return count;
   }
 
+  setOfflineBoard(address) {
+    if (address !== null && !Object.hasOwn(this.boards, address)) return;
+    if (address === this.offlineBoard) return;
+    if (this.offlineBoard) this.event('FAULT', 'Board ' + this.offlineBoard + ' is responding again');
+    this.offlineBoard = address;
+    if (!address) return;
+    const opened = this.boards[address].opened;
+    this.boards[address] = new Board();
+    this.boards[address].opened = opened;
+    this.delayedReplies = this.delayedReplies.filter(reply => reply.address !== address);
+    this.event('FAULT', 'Board ' + address + ' stopped responding');
+  }
+
+  setStuckDoor(address, bay) {
+    if (address === null) {
+      if (this.stuckDoor) this.event('FAULT', 'Stuck-door fault cleared');
+      this.stuckDoor = null;
+      return;
+    }
+    if (!Object.hasOwn(this.boards, address) || !Number.isInteger(bay) || bay < 0 || bay >= bays.length) return;
+    if (this.stuckDoor?.address === address && this.stuckDoor.bay === bay) return;
+    this.stuckDoor = {address, bay};
+    this.boards[address].opened |= 1 << bay;
+    this.event('FAULT', 'Board ' + address + ', door ' + (bay + 1) + ' is stuck open');
+  }
+
+  setReplyDelay(delay) {
+    if (![0, 250, 500, 1000, 2000].includes(delay) || delay === this.replyDelay) return;
+    this.replyDelay = delay;
+    this.event('FAULT', delay ? 'Replies delayed by ' + delay + ' ms' : 'Reply delay cleared');
+  }
+
+  publishReply(address, reply, now = this.clock()) {
+    if (!this.replyDelay && !this.delayedReplies.length) {
+      this.event('RX', visible(reply));
+      return reply;
+    }
+    if (this.delayedReplies.length === 256) {
+      this.event('FAULT', 'Delayed reply queue full');
+      return '';
+    }
+    const due = Math.max(now + this.replyDelay, this.delayedReplies.at(-1)?.due ?? now);
+    this.delayedReplies.push({address, reply, due});
+    return '';
+  }
+
+  flushReplies(now) {
+    let replies = '';
+    while (this.delayedReplies.length && this.delayedReplies[0].due <= now) {
+      const {reply} = this.delayedReplies.shift();
+      this.event('RX', visible(reply));
+      replies += reply;
+    }
+    return replies;
+  }
+
   restorePower() {
     if (this.powerOn) return;
     for (const address of Object.keys(this.boards)) {
@@ -101,7 +161,7 @@ export class Locker {
   }
 
   coilActive(address, bay) {
-    return this.powerOn && Boolean(this.boards[address].outputs & (1 << bay));
+    return this.powerOn && address !== this.offlineBoard && Boolean(this.boards[address].outputs & (1 << bay));
   }
 
   move(address, bay) {
@@ -109,6 +169,10 @@ export class Locker {
     const mask = 1 << bay;
     const opened = !(board.opened & mask);
     const label = 'Bay ' + address + '/' + bays[bay];
+    if (!opened && this.stuckDoor?.address === address && this.stuckDoor.bay === bay) {
+      this.event('FAULT', label + ' · door stayed open');
+      return false;
+    }
     if (opened && !this.coilActive(address, bay)) {
       const reason = this.powerOn ? 'coil has no drive' : 'power supplies are off';
       this.event('FAULT', label + ' · door stayed closed, ' + reason);
@@ -128,8 +192,9 @@ export class Locker {
     const address = match?.[2] ?? this.master;
     this.event('TX', visible(raw + '\r'));
     const board = this.boards[address];
-    if (!board) {
-      this.event('FAULT', 'No reply · check controller address');
+    if (!board || address === this.offlineBoard) {
+      this.event('FAULT', address === this.offlineBoard
+        ? 'No reply · Board ' + address + ' is offline' : 'No reply · check controller address');
       return '';
     }
     const result = this.execute(board, address, body, Boolean(match?.[2]));
@@ -137,12 +202,14 @@ export class Locker {
     if (active > lockLimit) {
       this.tripCount = active;
       this.powerOn = false;
+      this.delayedReplies = [];
       for (const linked of Object.values(this.boards)) linked.clear();
       this.event('POWER', 'Power supplies off · ' + active + ' locks energised · serial offline');
       return '';
     }
-    this.event('RX', result ? visible(result) : 'No acknowledgement');
-    return result;
+    if (result) return this.publishReply(address, result);
+    this.event('RX', 'No acknowledgement');
+    return '';
   }
 
   execute(board, address, body, addressed) {
@@ -276,13 +343,12 @@ export class Locker {
 
   tick() {
     if (!this.powerOn) return '';
-    let replies = '';
     const now = this.clock();
+    let replies = this.flushReplies(now);
     for (const [address, board] of Object.entries(this.boards)) {
+      if (address === this.offlineBoard) continue;
       const publish = text => {
-        const reply = this.reply(address, text);
-        this.event('RX', visible(reply));
-        replies += reply;
+        replies += this.publishReply(address, this.reply(address, text), now);
       };
       if (board.resetPowerAt !== null && now >= board.resetPowerAt) {
         board.clear();

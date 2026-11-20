@@ -126,3 +126,39 @@ test('cabinets on separate COM links can reuse A-E without sharing state', () =>
   assert.equal(second.powerOn, true);
   assert.match(second.command('ISB#A'), /^<A>/);
 });
+
+test('fault settings affect only the selected cabinet and door', () => {
+  const normal = new Locker();
+  const faulty = new Locker();
+  faulty.setOfflineBoard('AB');
+  assert.equal(faulty.offlineBoard, null);
+  faulty.setOfflineBoard('B');
+  assert.equal(faulty.command('ISB#B'), '');
+  assert.match(normal.command('ISB#B'), /^<B>/);
+  assert.match(faulty.command('ISB#A'), /^<A>/);
+  faulty.setStuckDoor('B', 2);
+  faulty.setOfflineBoard(null);
+  assert.match(faulty.command('ISB#B'), /00000100~/);
+  assert.equal(faulty.move('B', 2), false);
+  assert.match(normal.command('ISB#B'), /00000000~/);
+  faulty.setStuckDoor(null);
+  assert.equal(faulty.move('B', 2), true);
+  assert.match(faulty.command('ISB#B'), /00000000~/);
+});
+
+test('delayed replies remain ordered, and disabling a board drops its queued replies', () => {
+  let now = 0;
+  const locker = new Locker(() => now);
+  locker.setReplyDelay(500);
+  assert.equal(locker.command('ISB#A'), '');
+  assert.equal(locker.command('ISB#B'), '');
+  locker.setOfflineBoard('A');
+  now = 200;
+  locker.setReplyDelay(0);
+  assert.equal(locker.command('ISB#C'), '');
+  now = 499;
+  assert.equal(locker.tick(), '');
+  now = 500;
+  assert.equal(locker.tick(), '<B>Ex(BIN):00000000:00000000~\n\r<C>Ex(BIN):00000000:00000000\n\r');
+  assert.equal(locker.tick(), '');
+});

@@ -245,3 +245,33 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
 #connect { background: #145e51; border-color: #145e51; color: white; white-space: nowrap; }
 #connect:hover { background: #104b41; }
 [data-part="connection"] { overflow-wrap: anywhere; }
+
+.fault-controls { position: relative; flex: none; }
+.fault-controls summary {
+  padding: 5px 7px;
+  border: 1px solid #bbcdcb;
+  border-radius: 7px;
+  background: #f5f9f8;
+  cursor: pointer;
+  font-size: .76rem;
+}
+.fault-controls summary:focus-visible { outline: 2px solid #cf8309; }
+.fault-fields {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  top: calc(100% + 4px);
+  width: 202px;
+  padding: 9px;
+  border: 1px solid #bbcdcb;
+  border-radius: 8px;
+  box-shadow: 0 5px 16px #17283235;
+  background: white;
+  font-size: .75rem;
+}
+.fault-fields label { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-block: 4px; }
+.fault-fields select { font: inherit; }
+.fault-fields fieldset { margin: 7px 0 0; padding: 5px; border: 1px solid var(--line); }
+.fault-door { display: flex; gap: 7px; }
+.fault-fields button { padding: 3px 7px; font-size: .72rem; }
+.bay[data-stuck=true] { box-shadow: inset 0 0 0 2px #d78a24; }

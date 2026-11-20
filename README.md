@@ -38,4 +38,8 @@ The Pico OLED menu opens the emulator with a `cabinets` URL parameter from 1 to 
 
 Keep the emulator open while the locker app is connected. It models board C as master, with 1 for an open door and 0 for a closed door. Click an energised door to open it and click it again to close it. The monitor shows the serial commands, replies and door events. The simulator runs in the browser and stores its state for the current connection.
 
+On the Tool Kit OLED, selecting a locker preset shows link status and the selected ports. A filled bar flashes when a locker port sends a command. A thin bar marks ports that have sent traffic during the current connection. Press **Next** to return to the menu.
+
+Open **Faults** on a cabinet to silence one controller, hold one door open, or delay replies. These faults apply only to that cabinet and can be cleared with its controls.
+
 The cabinet trips when a fifth lock is energised at the same time. Coil drive cuts out immediately, and the controller stops replying over serial. Select **Restore power** on the cabinet to restart the controller. Doors keep their physical positions through the power cycle.

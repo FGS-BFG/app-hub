@@ -1,4 +1,4 @@
-import {Locker, SerialFrames, boards, bays} from './model.js?v=toolkit-com';
+import {Locker, SerialFrames, boards, bays} from './model.js?v=cabinet-faults';
 
 const el = id => document.getElementById(id);
 const help = el('connection-help');
@@ -19,11 +19,19 @@ class Pico {
     this.channels = panels.map((panel, index) => ({
       number: index + 1,
       panel,
-      locker: new Locker(),
+      locker: this.newSession(panel.locker),
       frames: new SerialFrames(),
     }));
     this.pending = '';
     this.outgoing = Promise.resolve();
+  }
+
+  newSession(previous) {
+    const locker = new Locker();
+    locker.setOfflineBoard(previous.offlineBoard);
+    locker.setReplyDelay(previous.replyDelay);
+    if (previous.stuckDoor) locker.setStuckDoor(previous.stuckDoor.address, previous.stuckDoor.bay);
+    return locker;
   }
 
   async open() {
@@ -33,9 +41,9 @@ class Pico {
     this.reader = this.port.readable.getReader();
     this.writer = this.port.writable.getWriter();
     this.pump = this.read();
-    const negotiate = async (command, marker) => {
+    const negotiate = async (command, marker, attempts = 5) => {
       this.expectedMarker = marker;
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let attempt = 0; attempt < attempts; attempt++) {
         await this.writer.write(encoder.encode(command));
         await new Promise(resolve => setTimeout(resolve, 175));
         if (this.failure) throw this.failure;
@@ -43,7 +51,8 @@ class Pico {
       }
       return false;
     };
-    if (!await negotiate('\n?multi\n', 'MCI304-USB-4')
+    if (!await negotiate('\n?multi=' + this.channels.length + '\n', 'MCI304-USB-4', 2)
+        && !await negotiate('\n?multi\n', 'MCI304-USB-4')
         && !await negotiate('\n?\n', 'MCI304-USB-1')) {
       throw Error('The Pico did not answer. Select the browser bridge COM port.');
     }
@@ -232,6 +241,12 @@ function renderConnection() {
   connectButton.disabled = opening || !navigator.serial;
   connectButton.textContent = bridge ? 'Disconnect Pico' : 'Connect Pico';
   el('connection').textContent = bridge ? 'Pico connected' : opening ? 'Connecting' : 'Pico disconnected';
+  for (const panel of panels) {
+    for (const field of ['offline-board', 'reply-delay', 'stuck-board', 'stuck-door', 'apply-stuck']) {
+      panel.parts[field].disabled = opening;
+    }
+    panel.parts['clear-stuck'].disabled = opening || !panel.locker.stuckDoor;
+  }
 }
 
 function renderCabinet(panel) {
@@ -255,16 +270,26 @@ function renderCabinet(panel) {
       + (lastRelease.powered ? '' : ' · no coil power')
     : 'No lock release recorded';
   if (release.textContent !== label) release.textContent = label;
-  for (const [address, buttons] of Object.entries(modules)) {
+  const faultCount = Number(Boolean(locker.offlineBoard)) + Number(Boolean(locker.stuckDoor)) + Number(locker.replyDelay > 0);
+  const faultLabel = faultCount ? 'Faults (' + faultCount + ')' : 'Faults';
+  if (parts['fault-summary'].textContent !== faultLabel) parts['fault-summary'].textContent = faultLabel;
+  parts['clear-stuck'].disabled = opening || !locker.stuckDoor;
+  for (const [address, {buttons, module, controller}] of Object.entries(modules)) {
+    const online = address !== locker.offlineBoard;
+    module.dataset.online = online;
+    controller.dataset.online = online;
     const board = locker.boards[address];
     buttons.forEach((button, index) => {
       const open = Boolean(board.opened & (1 << index));
       const active = locker.coilActive(address, index);
       button.dataset.open = open;
       button.dataset.active = active;
+      const stuck = locker.stuckDoor?.address === address && locker.stuckDoor.bay === index;
+      button.dataset.stuck = stuck;
       button.dataset.recent = lastRelease?.board === address && lastRelease.bay === index;
       const name = 'Board ' + address + ', door ' + (index + 1) + ' · ' + (open ? 'open' : 'closed')
-        + (active ? ' · lock energised' : '');
+        + (active ? ' · lock energised' : '')
+        + (stuck ? ' · stuck open' : '');
       button.setAttribute('aria-label', name);
       button.title = name;
     });
@@ -297,9 +322,15 @@ function makeBay(address, code, index, panel) {
     } else {
       bridge.writeReply(channel, locker.tick());
       if (!locker.move(address, index)) {
-        status.textContent = locker.powerOn
-          ? 'Board ' + address + ', door ' + (index + 1) + ' is locked'
-          : 'Power supplies off. Restore power to release a door.';
+        if (locker.stuckDoor?.address === address && locker.stuckDoor.bay === index) {
+          status.textContent = 'Board ' + address + ', door ' + (index + 1) + ' is stuck open.';
+        } else if (address === locker.offlineBoard) {
+          status.textContent = 'Board ' + address + ' is offline.';
+        } else {
+          status.textContent = locker.powerOn
+            ? 'Board ' + address + ', door ' + (index + 1) + ' is locked'
+            : 'Power supplies off. Restore power to release a door.';
+        }
       }
     }
     status.hidden = !status.textContent;
@@ -330,7 +361,32 @@ function makeModule(address, panel) {
   controller.className = 'controller';
   controller.textContent = address;
   parts['controller-deck'].append(controller);
-  return [address, buttons];
+  return [address, {buttons, module, controller}];
+}
+
+function bindFaultControls(panel) {
+  const {parts} = panel;
+  const offline = parts['offline-board'];
+  const delay = parts['reply-delay'];
+  const board = parts['stuck-board'];
+  const door = parts['stuck-door'];
+  offline.add(new Option('Off', ''));
+  for (const address of boards) {
+    offline.add(new Option(address, address));
+    board.add(new Option(address, address));
+  }
+  for (let bay = 0; bay < bays.length; bay++) door.add(new Option(String(bay + 1), String(bay)));
+
+  function changeFault(mutator) {
+    mutator(panel.locker);
+    parts['door-status'].hidden = true;
+    renderCabinet(panel);
+  }
+  offline.addEventListener('change', () => changeFault(locker => locker.setOfflineBoard(offline.value || null)));
+  delay.addEventListener('change', () => changeFault(locker => locker.setReplyDelay(Number(delay.value))));
+  parts['apply-stuck'].addEventListener('click',
+    () => changeFault(locker => locker.setStuckDoor(board.value, Number(door.value))));
+  parts['clear-stuck'].addEventListener('click', () => changeFault(locker => locker.setStuckDoor(null)));
 }
 
 function makeCabinet(index) {
@@ -375,6 +431,7 @@ function makeCabinet(index) {
     parts['door-status'].hidden = true;
     renderCabinet(panel);
   });
+  bindFaultControls(panel);
   el('cabinet-grid').append(column);
   return panel;
 }
