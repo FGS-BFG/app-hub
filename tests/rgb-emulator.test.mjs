@@ -34,10 +34,14 @@ test('virtual firmware follows the RGB1 line protocol and rejects invalid values
 
 test('firmware limits input to 63 bytes and keeps presets through reset', () => {
   const firmware = new RGBFirmware();
-  const feed = text => firmware.feed(encoder.encode(text));
+  const commands = [];
+  const feed = text => firmware.feed(encoder.encode(text),
+    (command, truncated = false) => commands.push([command, truncated]));
   assert.equal(feed('x'.repeat(63) + '\n' + 'x'.repeat(64)), 'ERR UNKNOWN_COMMAND\n');
   assert.equal(feed('\n1,2,3\nBRIGHT 0\nSAVE 3\n'),
     'ERR LINE_TOO_LONG\nSTATE ON 100 1,2,3\nSTATE ON 0 1,2,3\nSTATE ON 0 1,2,3\n');
+  assert.deepEqual(commands, [['x'.repeat(63), false], ['x'.repeat(63), true],
+    ['1,2,3', false], ['BRIGHT 0', false], ['SAVE 3', false]]);
   assert.deepEqual([...pwmFor(firmware.state)], [0, 0, 0]);
   assert.equal(firmware.reset(), 'READY RGB1 115200\nSTATE OFF 100 255,255,255\n');
   assert.equal(feed('LOAD 3\nOFF\nBRIGHT 90\nON\n'),
@@ -95,8 +99,10 @@ function picoPort(greeting = 'MCI304-USB-1\r\n') {
 test('Pico transports Windows serial commands and streams ordered firmware replies', async t => {
   const { port, writes, push } = picoPort();
   const errors = [];
+  const commands = [];
   const firmware = new RGBFirmware();
-  const bridge = new Bridge(port, bytes => firmware.feed(bytes), error => errors.push(error));
+  const bridge = new Bridge(port, bytes => firmware.feed(bytes, command => commands.push(command)),
+    error => errors.push(error));
   t.after(() => bridge.close());
   await bridge.open();
 
@@ -111,6 +117,7 @@ test('Pico transports Windows serial commands and streams ordered firmware repli
   await until(() => writes.length === 3);
   const replies = writes.slice(1).map(line => Buffer.from(line.slice(1).trim(), 'hex').toString()).join('');
   assert.equal(replies, 'STATE OFF 100 255,255,255\nSTATE ON 100 0,255,0\nSTATE ON 40 0,255,0\nSTATE ON 40 0,255,0\n');
+  assert.deepEqual(commands, ['GET', 'SET 0,255,0', 'BRIGHT 40', 'GET']);
   assert.ok(writes.slice(1).every(line => line.trim().length <= 129));
   assert.deepEqual([...pwmFor(firmware.state)], [0, 409, 0]);
 

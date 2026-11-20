@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="dark">
 <title>RGB Controller · Local USB control</title>
 <style>
@@ -21,6 +21,23 @@ main{max-width:1250px;margin:auto;padding:32px 24px 48px}header{display:flex;ali
 .emulator-readout{display:flex;flex-wrap:wrap;gap:.4rem 1.25rem;margin-top:14px;color:var(--muted);font-variant-numeric:tabular-nums}
 .emulator-readout strong{color:var(--text)}
 .emulator-links{display:flex;flex-wrap:wrap;gap:.5rem 1rem;margin:14px 0 0}
+.pico-mode main{max-width:1080px}
+.pico-mode header{margin-bottom:16px}
+.pico-mode header .mark,.pico-mode .subtitle,.pico-mode .local-badge{display:none}
+.pico-mode .connection{padding:12px 16px;margin-bottom:14px}
+.pico-stage{display:grid;place-items:center;min-height:clamp(150px,33vw,350px);padding:clamp(10px,3.5vw,40px);margin:0;border:1px solid var(--line);border-radius:16px;background:radial-gradient(ellipse at 36% 50%,#203247,#101a2b 72%)}
+.pico-assembly{position:relative;width:100%;aspect-ratio:1000/252}
+.pico-board{position:absolute;display:block;width:54%;height:auto;left:0;top:0;filter:drop-shadow(0 9px 10px #0006)}
+.pico-strip{position:absolute;left:60%;right:2%;top:49%;height:27%;transform:translateY(-50%);display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3%;align-items:center;padding:0 2% 0 3%;border:1px solid #f7ead6;border-radius:4px;background:linear-gradient(#fff7eb,#d7c9b2);box-shadow:0 5px 10px #0007}
+.pico-strip::before{content:"";position:absolute;left:0;top:13%;bottom:13%;width:4%;background:repeating-linear-gradient(to bottom,#b98245 0% 17%,transparent 17% 26%)}
+.pico-strip i{aspect-ratio:1;min-width:0;border:1px solid #a68960;border-radius:3px;background:#f1dfaa;box-shadow:inset 0 0 0 2px #fff4d6}
+.pico-strip[data-emitting] i{background:var(--strip-colour);border-color:var(--strip-colour);box-shadow:0 0 clamp(6px,2vw,24px) var(--strip-colour)}
+.pico-cable{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.pico-monitor{margin-top:14px;padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.pico-monitor h2{font-size:1rem}
+.pico-monitor pre{min-height:7rem;max-height:15rem;overflow:auto;margin:10px 0 0;padding:12px;border-radius:8px;background:#0c1423;color:#c4d5eb;white-space:pre-wrap;overflow-wrap:anywhere;font: .9rem/1.55 ui-monospace,Consolas,monospace}
+.pico-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media(max-width:560px){.pico-mode .connection{gap:10px}.pico-stage{padding-inline:8px}.pico-monitor{padding:12px}}
 </style>
 </head>
 <body>
@@ -46,6 +63,18 @@ main{max-width:1250px;margin:auto;padding:32px 24px 48px}header{display:flex;ali
     <a id="usb-controller-link" href="./">Use the USB controller</a>
   </nav>
 </section>
+<figure id="pico-stage" class="pico-stage" hidden>
+  <div class="pico-assembly">
+    <img id="pico-board" class="pico-board" alt="KiCad render of the RGB controller PCB" width="704" height="329">
+    <div id="pico-strip" class="pico-strip" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <canvas id="pico-cable" class="pico-cable" width="1000" height="252" aria-hidden="true"></canvas>
+  </div>
+  <figcaption id="pico-strip-state" class="pico-status">Simulated LED strip off</figcaption>
+</figure>
+<section id="pico-monitor" class="pico-monitor" aria-labelledby="pico-monitor-title" hidden>
+  <h2 id="pico-monitor-title">Incoming commands</h2>
+  <pre id="pico-commands" tabindex="0" aria-label="Incoming serial commands">Waiting for commands.</pre>
+</section>
 <div class="layout">
 <div class="stack">
 <section class="panel"><div class="panel-head"><div><div class="eyebrow">Make it yours</div><h2>Colour</h2></div><div class="preview"><span id="hex-value">#FFFFFF</span><div id="swatch" class="swatch" aria-label="Selected colour: white"></div></div></div>
@@ -60,7 +89,7 @@ main{max-width:1250px;margin:auto;padding:32px 24px 48px}header{display:flex;ali
 <section class="panel"><div class="panel-head"><div><div class="eyebrow">Put it in motion</div><h2>Animation</h2></div><span id="animation-state" class="animation-state" role="status">Stopped</span></div><label class="select-label" for="animation-mode">Pattern</label><select id="animation-mode"><option>Rainbow</option><option>Colour switch</option><option>Blink</option></select><div id="timing-controls"></div><div class="actions"><button id="start-animation" class="accent" data-device disabled>Start animation</button><button id="stop-animation" disabled>Stop</button></div><p class="helper">Blink uses the selected colour. Stop holds the last output. Use Output OFF to turn the LEDs off.</p></section>
 <section class="panel"><div class="panel-head"><div><div class="eyebrow">Keep a favourite</div><h2>Presets</h2></div></div><label class="select-label" for="preset-slot">Preset slot</label><div class="preset-row"><select id="preset-slot"><option>0</option><option>1</option><option>2</option><option>3</option></select><button id="save-preset" data-device disabled>Save</button><button id="load-preset" data-device disabled>Load &amp; turn on</button></div><p class="helper">Save stores the controller’s current colour and brightness in the selected slot.</p></section>
 </div></div>
-<details class="panel log-panel"><summary>Connection log</summary><pre id="log" aria-label="Serial commands and replies">Ready. Open this file in Microsoft Edge or Google Chrome.</pre><button id="clear-log" class="quiet">Clear log</button></details>
+<details id="regular-log" class="panel log-panel"><summary>Connection log</summary><pre id="log" aria-label="Serial commands and replies">Ready. Open this file in Microsoft Edge or Google Chrome.</pre><button id="clear-log" class="quiet">Clear log</button></details>
 <footer><p>Everything runs on this computer. Keep this page open during animations.<br>Closing or disconnecting keeps the last LED output. Use Output OFF first when needed.</p><div class="footer-controls"><button id="fullscreen" class="quiet">Full screen</button></div></footer>
 </main>
 <script id="controller">
@@ -285,13 +314,19 @@ const RGBEmulator = (() => {
       return this.stateLine();
     }
 
-    feed(bytes) {
+    feed(bytes, onCommand) {
       let reply = '';
       for (const byte of bytes) {
         if (byte === 13) continue;
         if (byte === 10) {
-          if (this.overflow) reply += 'ERR LINE_TOO_LONG\n';
-          else if (this.pending) reply += this.command(this.pending.split('\0', 1)[0]) + '\n';
+          if (this.overflow) {
+            onCommand?.(this.pending, true);
+            reply += 'ERR LINE_TOO_LONG\n';
+          } else if (this.pending) {
+            const command = this.pending.split('\0', 1)[0];
+            onCommand?.(command);
+            reply += this.command(command) + '\n';
+          }
           this.clearInput();
         } else if (!this.overflow) {
           if (this.pending.length === maxCommandBytes) this.overflow = true;
@@ -466,28 +501,65 @@ const RGBPicoBridge = (() => {
   function renderEmulator(value) {
     const pwm = RGBEmulator.pwmFor(value);
     const colour = pwm.map(channel => Math.round(channel * 255 / 1023));
-    $('emulator-strip').style.setProperty('--strip-colour', 'rgb(' + colour.join(', ') + ')');
-    $('emulator-strip').toggleAttribute('data-emitting', pwm.some(channel => channel > 0));
+    const strip = $(picoMode ? 'pico-strip' : 'emulator-strip');
+    const emitting = pwm.some(channel => channel > 0);
+    strip.style.setProperty('--strip-colour', 'rgb(' + colour.join(', ') + ')');
+    strip.toggleAttribute('data-emitting', emitting);
+    if (picoMode) {
+      $('pico-strip-state').textContent = emitting
+        ? 'Simulated LED strip at ' + value.brightness + '% brightness, RGB ' + value.rgb.join(', ')
+        : 'Simulated LED strip off';
+      return;
+    }
     $('emulator-output').textContent = value.on ? 'Output on' : 'Output off';
     $('emulator-pwm').textContent = 'PWM R ' + pwm[0] + ' · G ' + pwm[1] + ' · B ' + pwm[2];
   }
+
+  function drawPicoCable() {
+    const canvas = $('pico-cable').getContext('2d');
+    if (!canvas) return;
+    const leads = [
+      [101, 103, '#6fabed'], [124, 116, '#6ac19c'],
+      [148, 130, '#ed7c79'], [172, 143, '#dddccf'],
+    ];
+    canvas.lineCap = 'round';
+    for (const [terminal, contact, colour] of leads) {
+      canvas.beginPath();
+      canvas.moveTo(435, terminal);
+      canvas.bezierCurveTo(492, terminal, 568, contact, 613, contact);
+      canvas.strokeStyle = '#11202c';
+      canvas.lineWidth = 8;
+      canvas.stroke();
+      canvas.strokeStyle = colour;
+      canvas.lineWidth = 4;
+      canvas.stroke();
+    }
+  }
+
   function showEmulator() {
     document.title = picoMode ? 'RGB Controller Emulator · COM port' : 'RGB Controller Emulator';
     document.querySelector('h1').textContent = 'RGB Controller Emulator';
-    document.querySelector('.subtitle').textContent = picoMode
-      ? 'Use the emulator as an RGB device in a separate application.'
-      : 'Test colours, brightness, presets and animations on a virtual strip.';
-    document.querySelector('.local-badge').textContent = picoMode ? 'PICO COM MODE' : 'SIMULATED DEVICE';
+    if (picoMode) {
+      document.body.classList.add('pico-mode');
+      $('pico-board').src = 'rgb-pcb.webp';
+      $('pico-stage').hidden = false;
+      $('pico-monitor').hidden = false;
+      $('regular-log').hidden = true;
+      document.querySelector('footer').hidden = true;
+      drawPicoCable();
+      return;
+    }
+    document.querySelector('.subtitle').textContent = 'Test colours, brightness, presets and animations on a virtual strip.';
+    document.querySelector('.local-badge').textContent = 'SIMULATED DEVICE';
     $('emulator-preview').hidden = false;
-    document.querySelector('footer p').textContent = picoMode
-      ? 'Keep this page open while the RGB app uses the other COM port.'
-      : 'Presets survive emulator resets and clear when you reload the page.';
+    document.querySelector('footer p').textContent = 'Presets survive emulator resets and clear when you reload the page.';
   }
 
   function startPicoMode() {
     const firmware = new RGBEmulator.RGBFirmware();
     const button = $('connect');
-    const decoder = new TextDecoder();
+    const monitor = $('pico-commands');
+    const commands = [];
     let bridge = null;
     let busy = false;
 
@@ -501,10 +573,17 @@ const RGBPicoBridge = (() => {
         : 'Plug in the Pico running the MCI304 USB bridge and select its control port here.';
     }
 
+    function recordCommand(command, truncated) {
+      const printable = command.replace(/[^\x20-\x7e]/g,
+        char => '\\x' + char.charCodeAt(0).toString(16).padStart(2, '0'));
+      commands.push(new Date().toLocaleTimeString() + '  ' + printable + (truncated ? '…' : ''));
+      if (commands.length > 300) commands.shift();
+      monitor.textContent = commands.join('\n');
+      monitor.scrollTop = monitor.scrollHeight;
+    }
+
     function receive(bytes) {
-      const response = firmware.feed(bytes);
-      log('> ' + JSON.stringify(decoder.decode(bytes)));
-      if (response) log('< ' + response.trimEnd().split('\n').join('\n< '));
+      const response = firmware.feed(bytes, recordCommand);
       renderEmulator(firmware.state);
       return response;
     }
@@ -517,7 +596,6 @@ const RGBPicoBridge = (() => {
       busy = false;
       updateConnection();
       if (message) showError(message);
-      else log('Pico disconnected');
     }
 
     button.addEventListener('click', async () => {
@@ -537,7 +615,6 @@ const RGBPicoBridge = (() => {
         });
         await candidate.open();
         bridge = candidate;
-        log('Pico ready. Open the other COM port at 115200 baud.');
       } catch (error) {
         if (error.name !== 'NotFoundError') showError(error.message);
       } finally {
@@ -546,20 +623,9 @@ const RGBPicoBridge = (() => {
       }
     });
 
-    $('reset-emulator').addEventListener('click', () => {
-      firmware.reset();
-      renderEmulator(firmware.state);
-      log('Emulator reset. The next GET reports output off.');
-    });
-
     document.querySelector('.connection').setAttribute('aria-label', 'Pico USB bridge');
     document.querySelector('.layout').hidden = true;
     $('get-state').hidden = true;
-    $('emulator-mode-link').href = '?emulator=1';
-    $('emulator-mode-link').textContent = 'Use browser controls';
-    $('usb-controller-link').textContent = 'Open RGB Controller in another tab';
-    $('usb-controller-link').target = '_blank';
-    $('usb-controller-link').rel = 'noopener';
     updateConnection();
     if (!canUseSerial) showError('Open this page in desktop Chrome or Edge with Web Serial enabled.');
   }

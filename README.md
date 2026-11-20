@@ -17,6 +17,8 @@ in desktop Chrome or Edge and connect the Pico running the same MCI304 USB bridg
 locker emulator. Choose the Pico's control interface in the emulator. Keep the tab open
 and select the Pico's other COM port in the Windows RGB app at 115200 baud.
 Use one emulator per Pico bridge at a time.
+The COM view uses a KiCad render of the BIG-41 stage 6 board, with a simulated strip
+and a monitor for complete incoming commands.
 
 ## Locker troubleshooting guide
 
