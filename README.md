@@ -12,6 +12,12 @@ Open the [RGB Controller Emulator](https://fgs-bfg.github.io/app-hub/rgb-control
 to run the controller UI against a virtual serial device and see the strip's PWM output.
 Resetting the emulator powers the simulated strip off and keeps presets for the current tab.
 
+To use it from the Windows RGB app, open [COM mode](https://fgs-bfg.github.io/app-hub/rgb-controller/?emulator=1&com=1)
+in desktop Chrome or Edge and connect the Pico running the same MCI304 USB bridge as the
+locker emulator. Choose the Pico's control interface in the emulator. Keep the tab open
+and select the Pico's other COM port in the Windows RGB app at 115200 baud.
+Use one emulator per Pico bridge at a time.
+
 ## Locker troubleshooting guide
 
 Open the [USB troubleshooting guide](https://fgs-bfg.github.io/app-hub/locker-troubleshooting/). Source and maintenance instructions are in `locker-troubleshooting/README.md`; regression tests are in `tests/locker-troubleshooting/`. It connects to a user-selected USB COM port and keeps diagnostic records on that device. Publishing does not verify physical locker operation.

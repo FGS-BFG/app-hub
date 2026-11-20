@@ -13,6 +13,7 @@ main{max-width:1250px;margin:auto;padding:32px 24px 48px}header{display:flex;ali
 @media(max-width:850px){.layout{grid-template-columns:1fr}main{max-width:680px;padding:22px 16px 32px}.panel{padding:20px}.local-badge{display:none}.connection{align-items:stretch;flex-direction:column;padding:18px}.connection-buttons>*{flex:1}footer{flex-direction:column}.preset-row{grid-template-columns:75px 1fr 1.4fr}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 #emulator-preview{margin-bottom:18px}
+[hidden]{display:none!important}
 #emulator-preview .panel-head{flex-wrap:wrap;margin-bottom:16px}
 .emulator-strip{--strip-colour:rgb(0,0,0);display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:clamp(3px,1vw,14px);align-items:center;padding:clamp(10px,2vw,24px);border:1px solid #35435c;border-radius:12px;background:#0c1423}
 .emulator-strip i{aspect-ratio:1;border-radius:50%;background:#263246;border:1px solid #64718a}
@@ -39,7 +40,11 @@ main{max-width:1250px;margin:auto;padding:32px 24px 48px}header{display:flex;ali
     <strong id="emulator-output">Output off</strong>
     <span id="emulator-pwm">PWM R 0 · G 0 · B 0</span>
   </div>
-  <nav class="emulator-links" aria-label="RGB tools"><a href="../">App Hub</a><a href="./">Use the USB controller</a></nav>
+  <nav class="emulator-links" aria-label="RGB tools">
+    <a href="../">App Hub</a>
+    <a id="emulator-mode-link" href="?emulator=1&amp;com=1">Use Pico COM ports</a>
+    <a id="usb-controller-link" href="./">Use the USB controller</a>
+  </nav>
 </section>
 <div class="layout">
 <div class="stack">
@@ -348,13 +353,111 @@ const RGBEmulator = (() => {
   return { RGBFirmware, VirtualSerial, pwmFor };
 })();
 </script>
+<script id="rgb-pico-bridge">
+'use strict';
+const RGBPicoBridge = (() => {
+  const filter = { usbVendorId: 0x239a, usbProductId: 0x80f4 };
+  const encoder = new TextEncoder();
+
+  class Bridge {
+    constructor(port, receive, onLost) {
+      this.port = port;
+      this.receive = receive;
+      this.onLost = onLost;
+    }
+
+    async open() {
+      try {
+        await this.port.open({
+          baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none',
+        });
+        this.portOpen = true;
+        await this.port.setSignals({ dataTerminalReady: true, requestToSend: false });
+        this.reader = this.port.readable.getReader();
+        this.writer = this.port.writable.getWriter();
+        this.pump = this.read();
+        for (let attempt = 0; attempt < 5 && !this.ready; attempt++) {
+          await this.writer.write(encoder.encode('\n?\n'));
+          await new Promise(resolve => setTimeout(resolve, 250));
+          if (this.failure) break;
+        }
+        if (this.failure) throw this.failure;
+        if (!this.ready) throw new Error('No Pico bridge reply. Try the other Pico COM port.');
+      } catch (error) {
+        await this.close();
+        throw error;
+      }
+    }
+
+    async read() {
+      const decoder = new TextDecoder();
+      let pending = '';
+      try {
+        while (!this.closing) {
+          const { value, done } = await this.reader.read();
+          if (done) break;
+          pending += decoder.decode(value, { stream: true });
+          let end;
+          while (!this.closing && (end = pending.indexOf('\n')) !== -1) {
+            const line = pending.slice(0, end).replace(/\r$/, '');
+            pending = pending.slice(end + 1);
+            if (line === 'MCI304-USB-1') {
+              this.ready = true;
+            } else if (this.ready && line === '!write') {
+              throw new Error('The Pico could not deliver a reply. Reconnect the bridge and the RGB app.');
+            } else if (this.ready && /^>(?:[\da-f]{2})+$/i.test(line)) {
+              const bytes = Uint8Array.from(line.slice(1).match(/../g), pair => parseInt(pair, 16));
+              await this.send(this.receive(bytes));
+            }
+          }
+          if (pending.length > 1024) throw new Error('Invalid data from the Pico bridge.');
+        }
+        if (!this.closing) throw new Error('Pico disconnected.');
+      } catch (error) {
+        if (!this.closing) {
+          this.failure = error;
+          if (this.ready) this.onLost(error);
+        }
+      }
+    }
+
+    async send(reply) {
+      const bytes = encoder.encode(reply);
+      for (let offset = 0; offset < bytes.length && !this.closing; offset += 64) {
+        const hex = Array.from(bytes.subarray(offset, offset + 64),
+          byte => byte.toString(16).padStart(2, '0')).join('');
+        await this.writer.write(encoder.encode('<' + hex + '\n'));
+      }
+    }
+
+    close() {
+      return this.closeTask ??= this.finishClose();
+    }
+
+    async finishClose() {
+      this.closing = true;
+      await Promise.allSettled([this.reader?.cancel(), this.writer?.abort()]);
+      await this.pump;
+      this.reader?.releaseLock();
+      this.writer?.releaseLock();
+      if (this.portOpen) {
+        try { await this.port.close(); } catch {}
+      }
+    }
+  }
+
+  return { Bridge, filter };
+})();
+</script>
 <script id="interface">
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const emulating = new URLSearchParams(location.search).get('emulator') === '1';
-  const simulated = emulating ? new RGBEmulator.VirtualSerial() : null;
-  const canConnect = emulating || ('serial' in navigator && isSecureContext);
+  const options = new URLSearchParams(location.search);
+  const emulating = options.get('emulator') === '1';
+  const picoMode = emulating && options.get('com') === '1';
+  const canUseSerial = 'serial' in navigator && isSecureContext;
+  const canConnect = emulating || canUseSerial;
   const deviceName = emulating ? 'Emulator' : 'Controller';
   let colour = [255,255,255], brightness = 25, interval = 500, firstState = true;
   const logLines = [];
@@ -367,6 +470,98 @@ const RGBEmulator = (() => {
     $('emulator-strip').toggleAttribute('data-emitting', pwm.some(channel => channel > 0));
     $('emulator-output').textContent = value.on ? 'Output on' : 'Output off';
     $('emulator-pwm').textContent = 'PWM R ' + pwm[0] + ' · G ' + pwm[1] + ' · B ' + pwm[2];
+  }
+  function showEmulator() {
+    document.title = picoMode ? 'RGB Controller Emulator · COM port' : 'RGB Controller Emulator';
+    document.querySelector('h1').textContent = 'RGB Controller Emulator';
+    document.querySelector('.subtitle').textContent = picoMode
+      ? 'Use the emulator as an RGB device in a separate application.'
+      : 'Test colours, brightness, presets and animations on a virtual strip.';
+    document.querySelector('.local-badge').textContent = picoMode ? 'PICO COM MODE' : 'SIMULATED DEVICE';
+    $('emulator-preview').hidden = false;
+    document.querySelector('footer p').textContent = picoMode
+      ? 'Keep this page open while the RGB app uses the other COM port.'
+      : 'Presets survive emulator resets and clear when you reload the page.';
+  }
+
+  function startPicoMode() {
+    const firmware = new RGBEmulator.RGBFirmware();
+    const button = $('connect');
+    const decoder = new TextDecoder();
+    let bridge = null;
+    let busy = false;
+
+    function updateConnection() {
+      $('status-dot').classList.toggle('live', Boolean(bridge) && !busy);
+      button.disabled = busy || !canUseSerial;
+      button.textContent = bridge ? 'Disconnect Pico' : 'Connect Pico';
+      $('connection-status').textContent = busy ? 'Updating Pico connection…' : bridge ? 'Pico connected' : 'Pico disconnected';
+      $('connection-detail').textContent = bridge && !busy
+        ? 'Select the other Pico COM port in the RGB app at 115200 baud.'
+        : 'Plug in the Pico running the MCI304 USB bridge and select its control port here.';
+    }
+
+    function receive(bytes) {
+      const response = firmware.feed(bytes);
+      log('> ' + JSON.stringify(decoder.decode(bytes)));
+      if (response) log('< ' + response.trimEnd().split('\n').join('\n< '));
+      renderEmulator(firmware.state);
+      return response;
+    }
+
+    async function disconnectBridge(message) {
+      busy = true;
+      updateConnection();
+      await bridge.close();
+      bridge = null;
+      busy = false;
+      updateConnection();
+      if (message) showError(message);
+      else log('Pico disconnected');
+    }
+
+    button.addEventListener('click', async () => {
+      $('notice').hidden = true;
+      if (bridge) {
+        await disconnectBridge();
+        return;
+      }
+      busy = true;
+      updateConnection();
+      try {
+        const port = await navigator.serial.requestPort({ filters: [RGBPicoBridge.filter] });
+        firmware.reset();
+        renderEmulator(firmware.state);
+        const candidate = new RGBPicoBridge.Bridge(port, receive, error => {
+          if (bridge === candidate && !busy) void disconnectBridge(error.message);
+        });
+        await candidate.open();
+        bridge = candidate;
+        log('Pico ready. Open the other COM port at 115200 baud.');
+      } catch (error) {
+        if (error.name !== 'NotFoundError') showError(error.message);
+      } finally {
+        busy = false;
+        updateConnection();
+      }
+    });
+
+    $('reset-emulator').addEventListener('click', () => {
+      firmware.reset();
+      renderEmulator(firmware.state);
+      log('Emulator reset. The next GET reports output off.');
+    });
+
+    document.querySelector('.connection').setAttribute('aria-label', 'Pico USB bridge');
+    document.querySelector('.layout').hidden = true;
+    $('get-state').hidden = true;
+    $('emulator-mode-link').href = '?emulator=1';
+    $('emulator-mode-link').textContent = 'Use browser controls';
+    $('usb-controller-link').textContent = 'Open RGB Controller in another tab';
+    $('usb-controller-link').target = '_blank';
+    $('usb-controller-link').rel = 'noopener';
+    updateConnection();
+    if (!canUseSerial) showError('Open this page in desktop Chrome or Edge with Web Serial enabled.');
   }
   function drawColour() {
     const hex = '#' + colour.map(v => v.toString(16).padStart(2,'0')).join('');
@@ -386,6 +581,15 @@ const RGBEmulator = (() => {
     $(id + '-minus').addEventListener('click', () => update(Number($(id + '-range').value) - step));
     $(id + '-plus').addEventListener('click', () => update(Number($(id + '-range').value) + step));
   }
+  $('clear-log').addEventListener('click', () => { logLines.length = 0; $('log').textContent = ''; });
+  $('fullscreen').addEventListener('click', async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); } catch { showError('Full screen is unavailable in this browser window.'); } });
+  document.addEventListener('fullscreenchange', () => $('fullscreen').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen');
+  if (emulating) showEmulator();
+  if (picoMode) {
+    startPicoMode();
+    return;
+  }
+  const simulated = emulating ? new RGBEmulator.VirtualSerial() : null;
   ['Red','Green','Blue'].forEach((name, i) => adjuster('rgb-controls', name.toLowerCase(), name, 255, 0, 255, 10, ['#ff7d9a','#65dfb9','#79a2ff'][i], v => {colour[i] = v; drawColour();}));
   adjuster('brightness-controls', 'brightness', 'Brightness (%)', 25, 0, 100, 5, '#b3a1ff', v => brightness = v);
   adjuster('timing-controls', 'timing', 'Step time (ms)', 500, 150, 10000, 100, '#8baaff', v => interval = v);
@@ -422,18 +626,10 @@ const RGBEmulator = (() => {
   $('save-preset').addEventListener('click', () => send('SAVE ' + $('preset-slot').value)); $('load-preset').addEventListener('click', () => { firstState = true; send('LOAD ' + $('preset-slot').value); });
   $('start-animation').addEventListener('click', () => { try { $('notice').hidden = true; controller.startAnimation($('animation-mode').value, colour, interval); } catch (error) { showError(error.message); } });
   $('stop-animation').addEventListener('click', () => controller.stopAnimation());
-  $('clear-log').addEventListener('click', () => { logLines.length = 0; $('log').textContent = ''; });
-  $('fullscreen').addEventListener('click', async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); } catch { showError('Full screen is unavailable in this browser window.'); } });
-  document.addEventListener('fullscreenchange', () => $('fullscreen').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen');
   document.addEventListener('visibilitychange', () => { if (document.hidden && controller.animationMode !== null) { controller.stopAnimation(); log('Animation stopped because this page was hidden. The last output remains on.'); } });
   if (emulating) {
-    document.title = 'RGB Controller Emulator';
-    document.querySelector('h1').textContent = 'RGB Controller Emulator';
-    document.querySelector('.subtitle').textContent = 'Test colours, brightness, presets and animations on a virtual strip.';
-    document.querySelector('.local-badge').textContent = 'SIMULATED DEVICE';
+    document.querySelector('.connection').setAttribute('aria-label', 'Virtual RGB controller');
     $('connection-detail').textContent = 'Virtual serial · no hardware connection';
-    $('emulator-preview').hidden = false;
-    document.querySelector('footer p').textContent = 'Presets are kept for this tab, including when you reset the emulator.';
     renderEmulator(simulated.firmware.state);
     $('reset-emulator').addEventListener('click', () => {
       $('notice').hidden = true;
