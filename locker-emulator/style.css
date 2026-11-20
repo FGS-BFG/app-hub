@@ -19,6 +19,29 @@ h1 { margin: 5px 0 0; font-size: clamp(1.7rem, 4vw, 2.5rem); letter-spacing: -.0
 .dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: #8de1c6; border-radius: 50%; }
 .divider { color: #76a098; margin-inline: 5px; }
 .workspace { max-width: 680px; padding-block: 22px; }
+.workspace[data-cabinets="2"] { max-width: 1000px; }
+.workspace[data-cabinets="3"] { max-width: 1410px; }
+.workspace[data-cabinets="4"] { max-width: 1760px; }
+.connection-panel { margin-bottom: 14px; }
+.connection-panel .panel-head { margin-bottom: 7px; }
+.cabinet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr));
+  align-items: start;
+  gap: 16px;
+}
+.cabinet-column { min-width: 0; }
+.workspace:not([data-cabinets="1"]) .cabinet-stage { padding: 14px 15px 23px 8px; }
+.workspace:not([data-cabinets="1"]) .metal-cabinet {
+  --module-gap: 3px;
+  min-width: 0;
+  padding-inline: 6px;
+}
+.workspace:not([data-cabinets="1"]) .module { padding-inline: 2px; }
+.workspace:not([data-cabinets="1"]) .bay { min-height: 29px; }
+.workspace:not([data-cabinets="1"]) .trace { height: 178px; }
+.workspace:not([data-cabinets="1"]) .trace-row { gap: 5px; }
+
 .panel { background: white; border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
 .panel-head { display: flex; justify-content: space-between; align-items: start; gap: 10px; margin-bottom: 13px; }
 h2 { font-size: 1.19rem; margin: 0 0 3px; letter-spacing: -.02em; }
@@ -28,8 +51,6 @@ button { border: 1px solid #bbcdcb; border-radius: 7px; padding: 8px 11px; color
 button:hover { background: #e8f2ef; }
 button:disabled { opacity: .58; cursor: default; }
 button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
-.cabinet-picker:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
-.cabinet-picker button[aria-pressed=true] { background: #145e51; color: #fff; border-color: #145e51; }
 .cabinet-stage {
   padding: 20px clamp(14px, 4vw, 42px) 30px;
   overflow-x: auto;
@@ -76,8 +97,8 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
 }
 .power-lamp { width: 8px; height: 8px; border-radius: 50%; background: #21865f; }
 .power-panel strong { text-transform: uppercase; letter-spacing: .025em; }
-#active-lock-count { grid-column: 2; }
-#restore-power { margin-top: 4px; padding: 3px 8px; font-size: .72rem; }
+[data-part="active-lock-count"] { grid-column: 2; }
+[data-part="restore-power"] { margin-top: 4px; padding: 3px 8px; font-size: .72rem; }
 .power-panel[data-on=false] { background: #6b1b24; color: #fff3f0; }
 .power-panel[data-on=false] .power-lamp { background: #ff8e7f; box-shadow: 0 0 6px #ff8e7f; }
 .controller-deck { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--module-gap); padding: 8px 4px 6px; background: linear-gradient(#333e3b, #5a6861); }
@@ -136,7 +157,7 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
 .legend .legend-open::before { background: #d73e34; }
 .legend .legend-driven::before { background: #b96c12; }
 .legend .legend-release::before { background: transparent; border: 2px solid #d78a24; vertical-align: -2px; }
-.monitor { margin-top: 16px; }
+.monitor { margin-top: 10px; }
 .trace {
   height: 224px; overflow: auto; padding: 9px 10px; border-radius: 7px;
   background: #142628; color: #dae9e5; font: .76rem/1.45 ui-monospace, monospace;
@@ -153,15 +174,14 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
 .trace-row[data-kind="POWER"] strong { color: #ffd08e; }
 @media (max-width: 640px) {
   .frame { padding-inline: 12px; }
-  .top-content, .workspace { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .top-content { display: grid; grid-template-columns: minmax(0, 1fr); }
   .top-content { align-items: start; }
-  .workspace { gap: 12px; padding-block: 12px; }
+  .workspace { padding-block: 12px; }
   .panel { padding: 12px; }
   .cabinet-stage { padding-inline: 10px; }
 }
 @media (prefers-reduced-motion: reduce) { .door-face { transition: none; } }
 .product { text-decoration: none; }
 .product:hover { text-decoration: underline; }
-.connection-help { margin-bottom: 10px; }
 #connect { background: #145e51; border-color: #145e51; color: white; white-space: nowrap; }
 #connect:hover { background: #104b41; }

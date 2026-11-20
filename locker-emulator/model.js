@@ -1,5 +1,6 @@
 export const boards = 'ABCDE';
 const cabinetGroups = [boards, 'FGHIJ', 'KLMNO', 'PQRST'];
+const eventLimit = 180;
 
 export function cabinetBoards(count = 1) {
   return cabinetGroups.slice(0, Number.isInteger(count) && count >= 1 && count <= 4 ? count : 1);
@@ -70,16 +71,25 @@ export class Locker {
     this.cabinets = cabinetBoards(cabinetCount);
     this.boards = Object.fromEntries(Array.from(this.cabinets.join(''), address => [address, new Board()]));
     this.events = [];
+    this.cabinetEvents = this.cabinets.map(() => []);
+    this.cabinetForBoard = new Map(this.cabinets.flatMap((group, index) =>
+      Array.from(group, address => [address, index])));
     this.powerOn = true;
     this.tripCount = null;
     const cabinetStatus = this.cabinets.length === 1 ? 'Cabinet ready' : this.cabinets.length + ' cabinets ready';
     this.event('SYSTEM', cabinetStatus + '. All ' + Object.keys(this.boards).length * bays.length + ' doors are closed.');
   }
 
-  event(kind, message) {
+  event(kind, message, address = null) {
     const time = ((this.clock() - this.started) / 1000).toFixed(2).padStart(6, '0');
-    this.events.push({time, kind, message});
-    if (this.events.length > 180) this.events.shift();
+    const record = {time, kind, message};
+    const logs = address === null
+      ? this.cabinetEvents
+      : [this.cabinetEvents[this.cabinetForBoard.get(address) ?? this.cabinetForBoard.get(this.master) ?? 0]];
+    for (const log of [this.events, ...logs]) {
+      log.push(record);
+      if (log.length > eventLimit) log.shift();
+    }
   }
 
   reply(address, body) {
@@ -117,25 +127,25 @@ export class Locker {
     const label = 'Bay ' + address + '/' + bays[bay];
     if (opened && !this.coilActive(address, bay)) {
       const reason = this.powerOn ? 'coil has no drive' : 'power supplies are off';
-      this.event('FAULT', label + ' · door stayed closed, ' + reason);
+      this.event('FAULT', label + ' · door stayed closed, ' + reason, address);
       return false;
     }
     board.opened ^= mask;
     const doorState = opened ? ' opened' : ' closed';
     const sensorState = this.powerOn ? ' · sensor bit ' + Number(opened) : ' · controller offline';
-    this.event('DOOR', label + doorState + sensorState);
+    this.event('DOOR', label + doorState + sensorState, address);
     return true;
   }
 
   command(raw) {
     if (!this.powerOn) return '';
-    this.event('TX', visible(raw + '\r'));
     const match = directWrite.exec(raw) || routed.exec(raw);
     const body = match?.[1] ?? raw;
     const address = match?.[2] ?? this.master;
+    this.event('TX', visible(raw + '\r'), raw === 'LC' ? null : address);
     const board = this.boards[address];
     if (!board) {
-      this.event('FAULT', 'No reply · check controller address');
+      this.event('FAULT', 'No reply · check controller address', address);
       return '';
     }
     const result = this.execute(board, address, body, Boolean(match?.[2]));
@@ -147,7 +157,7 @@ export class Locker {
       this.event('POWER', 'Power supplies off · ' + active + ' locks energised · serial offline');
       return '';
     }
-    this.event('RX', result ? visible(result) : 'No acknowledgement');
+    this.event('RX', result ? visible(result) : 'No acknowledgement', address);
     return result;
   }
 
@@ -157,7 +167,7 @@ export class Locker {
     const short = !addressed;
     if (short && body === 'LC') {
       for (const [target, linked] of Object.entries(this.boards)) {
-        if (linked.outputs) this.event('BOARD', 'Board ' + target + ' · both lock banks cleared');
+        if (linked.outputs) this.event('BOARD', 'Board ' + target + ' · both lock banks cleared', target);
         linked.clear();
       }
       return say(lockWord(board));
@@ -179,7 +189,7 @@ export class Locker {
     if (body === 'ISS') return line('Sensor:' + binary(board.directInputs >> 8));
     if (/^IS.$/.test(body)) return line("Error 'ISx' type:");
     if (body === 'LAX' || body === 'LMX' || (short && body === 'OP')) {
-      if (board.outputs) this.event('BOARD', 'Board ' + address + ' · both lock banks cleared');
+      if (board.outputs) this.event('BOARD', 'Board ' + address + ' · both lock banks cleared', address);
       board.clear();
       return body === 'OP' ? say(lockWord(board)) : '';
     }
@@ -237,7 +247,7 @@ export class Locker {
       for (let index = 0; index < 16; index++) {
         if (mask & (1 << index)) {
           this.event('BOARD', address + '/' + bays[index] + ' · output latched · coil '
-            + (this.coilActive(address, index) ? 'energised' : 'de-energised'));
+            + (this.coilActive(address, index) ? 'energised' : 'de-energised'), address);
         }
       }
       if ((single || pair)[1] === 'A') board.clearAt = this.clock() + board.duration[0] * board.speed / 8;
@@ -287,7 +297,7 @@ export class Locker {
     for (const [address, board] of Object.entries(this.boards)) {
       const publish = text => {
         const reply = this.reply(address, text);
-        this.event('RX', visible(reply));
+        this.event('RX', visible(reply), address);
         replies += reply;
       };
       if (board.resetPowerAt !== null && now >= board.resetPowerAt) {
@@ -315,7 +325,7 @@ export class Locker {
       }
       if (board.clearAt !== null && now >= board.clearAt) {
         board.clear();
-        this.event('BOARD', 'Board ' + address + ' · automatic timeout cleared both lock banks');
+        this.event('BOARD', 'Board ' + address + ' · automatic timeout cleared both lock banks', address);
         if (board.verbose) publish(address === this.master ? 'LOCAL_Lock Done' : 'REMOTE_Lock Done');
       }
       if (board.heartbeatAt !== null && now >= board.heartbeatAt) {

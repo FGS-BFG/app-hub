@@ -122,3 +122,29 @@ test('cabinet presets add independent 80-bay groups on the existing serial bus',
   assert.match(locker.command('ISB#T'), /00000001~/);
   assert.deepEqual(new Locker(undefined, undefined, 0).cabinets, ['ABCDE']);
 });
+
+test('cabinet monitors receive their own serial traffic and shared bus events', () => {
+  let now = 0;
+  const locker = new Locker(() => now, 'C', 4);
+  const [first, second, third, fourth] = locker.cabinetEvents;
+  locker.command('ISB');
+  locker.command('CM!#T');
+  locker.command('LA0#T');
+  locker.move('T', 0);
+  now = 3000;
+  locker.tick();
+  assert.deepEqual(first.map(event => event.kind), ['SYSTEM', 'TX', 'RX']);
+  assert.deepEqual(second.map(event => event.kind), ['SYSTEM']);
+  assert.deepEqual(third.map(event => event.kind), ['SYSTEM']);
+  assert.ok(fourth.some(event => event.kind === 'TX' && event.message.includes('LA0#T')));
+  assert.ok(fourth.some(event => event.kind === 'DOOR'));
+  assert.ok(fourth.some(event => event.kind === 'RX' && event.message.includes('REMOTE_Lock Done')));
+  locker.command('LC');
+  for (const feed of locker.cabinetEvents) {
+    assert.ok(feed.some(event => event.kind === 'TX' && event.message.startsWith('LC')));
+  }
+  const fourthCount = fourth.length;
+  for (let index = 0; index < 180; index++) locker.command('ISB#A');
+  assert.equal(first.length, 180);
+  assert.equal(fourth.length, fourthCount);
+});

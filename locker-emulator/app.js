@@ -1,4 +1,4 @@
-import {Locker, SerialFrames, bays} from './model.js?v=cabinet-count';
+import {Locker, SerialFrames, bays} from './model.js?v=cabinet-monitors';
 
 const el = id => document.getElementById(id);
 const connectButton = el('connect');
@@ -10,7 +10,6 @@ const createLocker = () => new Locker(undefined, undefined, cabinetCount);
 let locker = createLocker();
 let bridge = null;
 let opening = false;
-let lastRelease = null;
 let renderedEvent = null;
 let paintPending = false;
 
@@ -143,7 +142,10 @@ async function connect() {
     const port = await navigator.serial.requestPort({filters: [{usbVendorId: 0x239a, usbProductId: 0x80f4}]});
     candidate = new Pico(port);
     locker = createLocker();
-    lastRelease = null;
+    for (const panel of panels) {
+      panel.lastRelease = null;
+      panel.parts['door-status'].hidden = true;
+    }
     await candidate.open();
     bridge = candidate;
     help.textContent = 'Use the other Pico COM port in the locker app. Click an energised door to open it. Click again to close it.';
@@ -156,21 +158,20 @@ async function connect() {
   }
 }
 
-function renderTrace() {
-  const events = locker.events;
-  if (renderedEvent === events.at(-1)) return;
-  renderedEvent = events.at(-1);
+function renderTrace(panel, events) {
+  if (panel.renderedEvent === events.at(-1)) return;
+  panel.renderedEvent = events.at(-1);
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
     if (event.kind !== 'BOARD') continue;
     const match = /^([A-Z])\/([0-9A-F]) · output latched · coil (energised|de-energised)$/.exec(event.message);
     if (match) {
-      lastRelease = {board: match[1], bay: bays.indexOf(match[2]), powered: match[3] === 'energised'};
+      panel.lastRelease = {board: match[1], bay: bays.indexOf(match[2]), powered: match[3] === 'energised'};
       break;
     }
   }
 
-  const trace = el('trace');
+  const trace = panel.parts.trace;
   const top = trace.scrollTop;
   const follow = trace.scrollHeight - trace.clientHeight - top < 12;
   const rows = events.map(event => {
@@ -194,20 +195,26 @@ function render() {
   connectButton.disabled = opening || !navigator.serial;
   connectButton.textContent = bridge ? 'Disconnect' : 'Connect Pico';
   el('connection').textContent = bridge ? 'Pico connected' : opening ? 'Connecting' : 'Pico disconnected';
-  renderTrace();
-  const power = el('power-panel');
-  el('cabinet').dataset.power = locker.powerOn;
-  const status = locker.powerOn ? 'Power supplies on' : 'Power supplies off';
+  renderedEvent = locker.events.at(-1);
   const active = locker.activeLockCount;
+  const status = locker.powerOn ? 'Power supplies on' : 'Power supplies off';
   const count = locker.powerOn
     ? active + (active === 1 ? ' lock energised' : ' locks energised')
     : locker.tripCount + ' locks at cutoff · serial offline';
-  power.dataset.on = locker.powerOn;
-  if (el('power-status').textContent !== status) el('power-status').textContent = status;
-  if (el('active-lock-count').textContent !== count) el('active-lock-count').textContent = count;
-  el('restore-power').hidden = locker.powerOn;
-  el('restore-power').disabled = !bridge;
-  const release = el('last-release');
+  panels.forEach((panel, index) => {
+    renderTrace(panel, locker.cabinetEvents[index]);
+    renderCabinet(panel, status, count);
+  });
+}
+
+function renderCabinet({parts, modules, lastRelease}, status, count) {
+  parts.cabinet.dataset.power = locker.powerOn;
+  parts['power-panel'].dataset.on = locker.powerOn;
+  if (parts['power-status'].textContent !== status) parts['power-status'].textContent = status;
+  if (parts['active-lock-count'].textContent !== count) parts['active-lock-count'].textContent = count;
+  parts['restore-power'].hidden = locker.powerOn;
+  parts['restore-power'].disabled = !bridge;
+  const release = parts['last-release'];
   const label = lastRelease
     ? 'Last release request · Board ' + lastRelease.board + ', door ' + (lastRelease.bay + 1)
       + (lastRelease.powered ? '' : ' · no coil power')
@@ -229,7 +236,7 @@ function render() {
   }
 }
 
-function makeBay(address, code, index) {
+function makeBay(address, code, index, status) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'bay';
@@ -247,7 +254,6 @@ function makeBay(address, code, index) {
   face.append(window, pull);
   button.append(lamp, face);
   button.addEventListener('click', () => {
-    const status = el('door-status');
     status.textContent = '';
     if (!bridge) {
       status.textContent = 'Connect the Pico first';
@@ -265,23 +271,8 @@ function makeBay(address, code, index) {
   return button;
 }
 
-const picker = el('cabinet-picker');
-let modules;
-
-function showCabinet(index) {
-  const group = locker.cabinets[index];
-  el('bays').replaceChildren();
-  el('controller-deck').replaceChildren();
-  modules = Object.fromEntries(Array.from(group, makeModule));
-  el('door-status').hidden = true;
-  for (const [position, button] of Array.from(picker.children).entries()) {
-    button.setAttribute('aria-pressed', String(position === index));
-  }
-  render();
-}
-
-function makeModule(address) {
-  const buttons = Array.from(bays, (code, index) => makeBay(address, code, index));
+function makeModule(address, parts) {
+  const buttons = Array.from(bays, (code, index) => makeBay(address, code, index, parts['door-status']));
   const module = document.createElement('div');
   module.className = 'module';
   const label = document.createElement('div');
@@ -296,42 +287,62 @@ function makeModule(address) {
     doors.append(side);
   }
   module.append(label, doors);
-  el('bays').append(module);
+  parts.bays.append(module);
   const controller = document.createElement('div');
   controller.className = 'controller';
   controller.textContent = address;
-  el('controller-deck').append(controller);
+  parts['controller-deck'].append(controller);
   return [address, buttons];
 }
 
-if (cabinetCount > 1) {
-  picker.hidden = false;
-  el('column-title').textContent = 'Locker cabinets';
-  el('cabinet-capacity').textContent = cabinetCount + ' cabinets · ' + cabinetCount * 80 + ' bays';
-  locker.cabinets.forEach((group, index) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = 'Cabinet ' + (index + 1);
-    button.title = 'Boards ' + group[0] + '–' + group.at(-1);
-    button.addEventListener('click', () => showCabinet(index));
-    picker.append(button);
+function makeCabinet(group, index) {
+  const column = el('cabinet-template').content.firstElementChild.cloneNode(true);
+  const parts = Object.fromEntries(Array.from(column.querySelectorAll('[data-part]'),
+    element => [element.dataset.part, element]));
+  const suffix = index + 1;
+  const title = cabinetCount === 1 ? 'Locker cabinet' : 'Cabinet ' + suffix;
+  parts.title.textContent = title + ' · Boards ' + group[0] + '–' + group.at(-1);
+  parts.title.id = 'cabinet-title-' + suffix;
+  column.querySelector('.cabinet').setAttribute('aria-labelledby', parts.title.id);
+
+  parts['monitor-title'].id = 'monitor-title-' + suffix;
+  column.querySelector('.monitor').setAttribute('aria-labelledby', parts['monitor-title'].id);
+  parts.trace.setAttribute('aria-label', title + ' serial commands, replies and door events');
+
+  const deck = parts['controller-deck'];
+  const toggle = parts['service-toggle'];
+  deck.id = 'controller-deck-' + suffix;
+  toggle.setAttribute('aria-controls', deck.id);
+  toggle.addEventListener('click', () => {
+    const expanded = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', String(!expanded));
+    toggle.firstElementChild.textContent = expanded ? 'Open service hatch' : 'Close service hatch';
+    deck.hidden = expanded;
   });
+  parts['restore-power'].addEventListener('click', () => {
+    if (!bridge || locker.powerOn) return;
+    bridge.frames = new SerialFrames();
+    bridge.pending = '';
+    locker.restorePower();
+    for (const panel of panels) panel.parts['door-status'].hidden = true;
+    render();
+  });
+
+  const panel = {
+    parts,
+    modules: Object.fromEntries(Array.from(group, address => makeModule(address, parts))),
+    lastRelease: null,
+    renderedEvent: null,
+  };
+  el('cabinet-grid').append(column);
+  return panel;
 }
 
-el('service-toggle').addEventListener('click', () => {
-  const toggle = el('service-toggle');
-  const expanded = toggle.getAttribute('aria-expanded') === 'true';
-  toggle.setAttribute('aria-expanded', String(!expanded));
-  toggle.firstElementChild.textContent = expanded ? 'Open service hatch' : 'Close service hatch';
-  el('controller-deck').hidden = expanded;
-});
+el('workspace').dataset.cabinets = cabinetCount;
+el('cabinet-capacity').textContent = cabinetCount === 1
+  ? '1 cabinet · 80 bays'
+  : cabinetCount + ' cabinets · ' + cabinetCount * 80 + ' bays';
+const panels = locker.cabinets.map(makeCabinet);
 connectButton.addEventListener('click', connect);
-el('restore-power').addEventListener('click', () => {
-  bridge.frames = new SerialFrames();
-  bridge.pending = '';
-  locker.restorePower();
-  el('door-status').hidden = true;
-  render();
-});
 if (!navigator.serial) help.textContent = 'Open this page in desktop Chrome or Edge with serial access enabled.';
-showCabinet(0);
+render();

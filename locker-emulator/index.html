@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCI 304 Locker Emulator</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=cabinet-count">
-  <script type="module" src="app.js?v=cabinet-count"></script>
+  <link rel="stylesheet" href="style.css?v=cabinet-monitors">
+  <script type="module" src="app.js?v=cabinet-monitors"></script>
 </head>
 <body>
   <header class="top">
@@ -15,40 +15,50 @@
       <div class="caption"><span class="dot"></span> <span id="connection">Pico disconnected</span> <span class="divider">/</span> CPU/IO v2.02 · FW 1.5.9fs</div>
     </div>
   </header>
-  <main class="frame workspace">
-    <section class="panel cabinet" aria-labelledby="column-title">
-      <div class="panel-head"><div><h2 id="column-title">Locker cabinet</h2><p id="cabinet-capacity">5 controllers · 80 bays</p></div><button id="connect" type="button">Connect Pico</button></div>
+  <main id="workspace" class="frame workspace">
+    <section class="panel connection-panel" aria-labelledby="connection-title">
+      <div class="panel-head">
+        <div><h2 id="connection-title">Locker connection</h2><p id="cabinet-capacity"></p></div>
+        <button id="connect" type="button">Connect Pico</button>
+      </div>
       <p id="connection-help" class="connection-help" role="status">Plug in the Pico. Connect its cabinet port here and use its other COM port in the locker app.</p>
-      <p id="last-release" class="release-status" role="status">No lock release recorded</p>
-      <p id="door-status" class="door-status" role="status" hidden></p>
-      <nav id="cabinet-picker" class="cabinet-picker" aria-label="Simulated cabinets" hidden></nav>
-      <div class="cabinet-stage">
-        <div id="cabinet" class="metal-cabinet" data-power="true">
-          <div class="service-hatch">
-            <div id="controller-deck" class="controller-deck" hidden></div>
-            <button id="service-toggle" class="hatch-cover" type="button" aria-expanded="false" aria-controls="controller-deck">
-              <span>Open service hatch</span>
-            </button>
-          </div>
-          <div id="bays" class="bays"></div>
-          <div class="base-hatch">
-            <div id="power-panel" class="power-panel" data-on="true" role="status">
-              <span class="power-lamp" aria-hidden="true"></span>
-              <strong id="power-status">Power supplies on</strong>
-              <span id="active-lock-count">0 locks energised</span>
+    </section>
+    <div id="cabinet-grid" class="cabinet-grid"></div>
+  </main>
+  <template id="cabinet-template">
+    <article class="cabinet-column">
+      <section class="panel cabinet">
+        <div class="panel-head"><h2 data-part="title">Locker cabinet</h2></div>
+        <p data-part="last-release" class="release-status" role="status">No lock release recorded</p>
+        <p data-part="door-status" class="door-status" role="status" hidden></p>
+        <div class="cabinet-stage">
+          <div data-part="cabinet" class="metal-cabinet" data-power="true">
+            <div class="service-hatch">
+              <div data-part="controller-deck" class="controller-deck" hidden></div>
+              <button data-part="service-toggle" class="hatch-cover" type="button" aria-expanded="false">
+                <span>Open service hatch</span>
+              </button>
             </div>
-            <button id="restore-power" type="button" hidden>Restore power</button>
+            <div data-part="bays" class="bays"></div>
+            <div class="base-hatch">
+              <div data-part="power-panel" class="power-panel" data-on="true" role="status">
+                <span class="power-lamp" aria-hidden="true"></span>
+                <strong data-part="power-status">Power supplies on</strong>
+                <span data-part="active-lock-count">0 locks energised</span>
+              </div>
+              <button data-part="restore-power" type="button" hidden>Restore power</button>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="legend"><span class="legend-closed">Closed</span><span class="legend-open">Open</span><span class="legend-driven">Output active</span><span class="legend-release">Last release</span></div>
-    </section>
-    <section class="panel monitor" aria-labelledby="monitor-title">
-      <div class="panel-head"><h2 id="monitor-title">Live serial monitor</h2></div>
-      <div id="trace" class="trace" role="region" aria-label="Serial commands, replies and door events" tabindex="0">
-        <p class="trace-empty">Waiting for serial traffic</p>
-      </div>
-    </section>
-  </main>
+        <div class="legend"><span class="legend-closed">Closed</span><span class="legend-open">Open</span><span class="legend-driven">Output active</span><span class="legend-release">Last release</span></div>
+      </section>
+      <section class="panel monitor">
+        <div class="panel-head"><h2 data-part="monitor-title">Live serial monitor</h2></div>
+        <div data-part="trace" class="trace" role="region" aria-label="Serial commands, replies and door events" tabindex="0">
+          <p class="trace-empty">Waiting for serial traffic</p>
+        </div>
+      </section>
+    </article>
+  </template>
 </body>
 </html>
