@@ -2,9 +2,15 @@
 
 GitHub Pages publishes this repository publicly. Do not add credentials, confidential content, or private data. Google apps and private repositories keep their existing access controls.
 
-Edit `index.html` to add or update a card. The RGB browser app is a copy from the private rgb-controller repository. To update it, review and copy `browser_app/RGB Controller.html` into `rgb-controller/index.html`, then commit and push. The original project is not published automatically.
+Edit `index.html` to add or update a card. The RGB browser app comes from the private rgb-controller repository. When updating `rgb-controller/index.html` from that source, retain the App Hub integration for `?emulator=1`. The original project is not published automatically.
 
 GitHub Pages builds the site when changes are pushed to the configured branch. The RGB app needs a compatible desktop browser and USB serial permission. Physical hardware operation has not been verified by publishing the site.
+
+## RGB Controller Emulator
+
+Open the [RGB Controller Emulator](https://fgs-bfg.github.io/app-hub/rgb-controller/?emulator=1)
+to run the controller UI against a virtual serial device and see the strip's PWM output.
+Resetting the emulator powers the simulated strip off and keeps presets for the current tab.
 
 ## Locker troubleshooting guide
 
