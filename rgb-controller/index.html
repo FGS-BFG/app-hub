@@ -25,6 +25,7 @@ main{max-width:1250px;margin:auto;padding:32px 24px 48px}header{display:flex;ali
 .pico-mode header{margin-bottom:16px}
 .pico-mode header .mark,.pico-mode .subtitle,.pico-mode .local-badge{display:none}
 .pico-mode .connection{padding:12px 16px;margin-bottom:14px}
+#pico-open-controller:not([hidden]){display:inline-block;margin-top:5px;color:#9dd7f4;font-size:.83rem}
 .pico-stage{display:grid;place-items:center;min-height:clamp(150px,33vw,350px);padding:clamp(10px,3.5vw,40px);margin:0;border:1px solid var(--line);border-radius:16px;background:radial-gradient(ellipse at 36% 50%,#203247,#101a2b 72%)}
 .pico-assembly{position:relative;width:100%;aspect-ratio:1000/252}
 .pico-board{position:absolute;display:block;width:54%;height:auto;left:0;top:0;filter:drop-shadow(0 9px 10px #0006)}
@@ -44,7 +45,7 @@ main{max-width:1250px;margin:auto;padding:32px 24px 48px}header{display:flex;ali
 <main>
 <header><div class="brand"><div class="mark" aria-hidden="true"><i></i><i></i><i></i></div><div><h1>RGB Controller</h1><p class="subtitle">Your light. Direct control.</p></div></div><span class="local-badge">LOCAL USB CONTROL</span></header>
 <div id="notice" class="notice" role="alert" hidden></div>
-<section class="connection" aria-label="USB connection"><div class="connection-text"><span id="status-dot" class="dot" aria-hidden="true"></span><div><div id="connection-status" role="status">Ready to connect</div><div id="connection-detail">Connect the controller by USB, then choose its serial port.</div></div></div><div class="connection-buttons"><button id="get-state" class="quiet" data-device disabled>Get state</button><button id="connect" class="accent">Connect controller</button></div></section>
+<section class="connection" aria-label="USB connection"><div class="connection-text"><span id="status-dot" class="dot" aria-hidden="true"></span><div><div id="connection-status" role="status">Ready to connect</div><div id="connection-detail">Connect the controller by USB, then choose its serial port.</div><a id="pico-open-controller" href="./" target="_blank" rel="noopener" hidden>Open RGB Controller in a new tab</a></div></div><div class="connection-buttons"><button id="get-state" class="quiet" data-device disabled>Get state</button><button id="connect" class="accent">Connect controller</button></div></section>
 <section id="emulator-preview" class="panel" aria-labelledby="emulator-title" hidden>
   <div class="panel-head">
     <h2 id="emulator-title">Simulated RGB strip</h2>
@@ -580,10 +581,12 @@ const RGBPicoBridge = (() => {
       $('status-dot').classList.toggle('live', Boolean(bridge) && !busy);
       button.disabled = busy || !canUseSerial;
       button.textContent = bridge ? 'Disconnect Pico' : 'Connect Pico';
-      $('connection-status').textContent = busy ? 'Updating Pico connection…' : bridge ? 'Pico connected' : 'Pico disconnected';
+      $('connection-status').textContent = busy ? 'Updating Pico connection…'
+        : bridge ? 'Browser bridge connected' : 'Browser bridge disconnected';
       $('connection-detail').textContent = bridge && !busy
-        ? 'Select the other Pico COM port in the RGB app at 115200 baud.'
-        : 'Plug in the Pico running the MCI304 USB bridge and select its control port here.';
+        ? 'Keep this emulator tab open. Connect the RGB Controller to the Pico port for Locker 1 / RGB at 115200 baud.'
+        : 'Select the Pico browser bridge COM port here.';
+      $('pico-open-controller').hidden = !bridge || busy;
     }
 
     function recordCommand(command, truncated) {
