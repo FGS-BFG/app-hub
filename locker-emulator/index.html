@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCI 304 Locker Emulator</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=cabinet-monitors">
+  <link rel="stylesheet" href="style.css?v=four-across">
   <script type="module" src="app.js?v=cabinet-monitors"></script>
 </head>
 <body>
@@ -24,6 +24,7 @@
       <p id="connection-help" class="connection-help" role="status">Plug in the Pico. Connect its cabinet port here and use its other COM port in the locker app.</p>
     </section>
     <div id="cabinet-grid" class="cabinet-grid"></div>
+    <div class="legend" aria-label="Door indicators"><span class="legend-closed">Closed</span><span class="legend-open">Open</span><span class="legend-driven">Output active</span><span class="legend-release">Last release</span></div>
   </main>
   <template id="cabinet-template">
     <article class="cabinet-column">
@@ -50,7 +51,6 @@
             </div>
           </div>
         </div>
-        <div class="legend"><span class="legend-closed">Closed</span><span class="legend-open">Open</span><span class="legend-driven">Output active</span><span class="legend-release">Last release</span></div>
       </section>
       <section class="panel monitor">
         <div class="panel-head"><h2 data-part="monitor-title">Live serial monitor</h2></div>
