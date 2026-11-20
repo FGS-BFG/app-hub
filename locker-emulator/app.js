@@ -1,4 +1,4 @@
-import {Locker, SerialFrames, boards, bays} from './model.js?v=board-toggles';
+import {Locker, SerialFrames, boards, bays} from './model.js?v=master-reset';
 
 const el = id => document.getElementById(id);
 const help = el('connection-help');

@@ -167,3 +167,52 @@ test('delayed replies remain ordered, and disabling a board drops its queued rep
   assert.equal(locker.tick(), '<B>Ex(BIN):00000000:00000000~\n\r<C>Ex(BIN):00000000:00000000\n\r');
   assert.equal(locker.tick(), '');
 });
+
+test('resetting master C restarts the online boards in only that cabinet', () => {
+  let now = 0;
+  const locker = new Locker(() => now);
+  const otherCabinet = new Locker(() => now);
+  locker.command('CM!#A');
+  locker.command('DR3#A');
+  locker.command('LM0#B');
+  assert.equal(locker.move('B', 0), true);
+  locker.command('CM)#D');
+  locker.setBoardOffline('E', true);
+  otherCabinet.command('LM0#A');
+
+  assert.match(locker.command('RST#C'), /^<C>SYSTEM_Reset/);
+  assert.match(locker.command('ISB#A'), /^<A>/);
+  now = 1800;
+  assert.equal(locker.tick(), '');
+  for (const board of 'ABCD') assert.equal(locker.command('ISB#' + board), '');
+  assert.equal(locker.activeLockCount, 0);
+  assert.equal(otherCabinet.activeLockCount, 1);
+  assert.match(otherCabinet.command('ISB#A'), /^<A>/);
+
+  now = 4800;
+  const startup = locker.tick();
+  assert.match(startup, /^<C>Firmware/);
+  assert.doesNotMatch(startup, /<[ABDE]>/);
+  assert.match(locker.command('ISC#A'), /Responses: OFF/);
+  assert.match(locker.command('ISC#A'), /Timer DRx: 05/);
+  assert.match(locker.command('ISB#B'), /00000001~/);
+  locker.command('LM0#D');
+  assert.match(locker.command('LRS#D'), /0000000000000001/);
+  assert.equal(locker.command('ISB#E'), '');
+  assert.deepEqual(locker.events.filter(event => event.message.endsWith(' restarted')).map(event => event.message),
+    ['Board A restarted', 'Board B restarted', 'Board C restarted', 'Board D restarted']);
+});
+
+test('an individual board reset leaves the other controllers running', () => {
+  let now = 0;
+  const locker = new Locker(() => now);
+  locker.command('LM0#D');
+  assert.match(locker.command('RST#B'), /^<B>REMOTE_Reset/);
+  now = 1800;
+  locker.tick();
+  assert.equal(locker.command('ISB#B'), '');
+  assert.match(locker.command('ISB#C'), /^<C>/);
+  now = 4800;
+  assert.match(locker.tick(), /<B>REMOTE_Reset Done~/);
+  assert.match(locker.command('LRS#D'), /0000000000000001/);
+});

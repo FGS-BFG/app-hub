@@ -138,7 +138,7 @@ summary { color: #174541; cursor: pointer; font-weight: 600; }
       <section id="recovery-plan" class="recovery-plan" aria-labelledby="recovery-title" hidden>
         <h3 id="recovery-title">Recovery steps</h3>
         <ol>
-          <li>Save the initial report. Reset the boards and check for replies again.</li>
+          <li id="recovery-reset-step">Save the initial report. Reset the boards and check for replies again.</li>
           <li>If any board is still missing, power cycle the master board and check again.</li>
         </ol>
       </section>
@@ -253,6 +253,9 @@ function render() {
   byId('feedback').textContent = feedback;
   byId('feedback').hidden = !feedback;
   byId('recovery-plan').hidden = stage !== 'initial-failed' && stage !== 'resetting';
+  byId('recovery-reset-step').textContent = layout?.master === 'C'
+    ? 'Save the initial report. Reset master board C, then check all fitted boards again.'
+    : 'Save the initial report. Reset the boards and check for replies again.';
   byId('save').disabled = busy || !passes.length;
   byId('finish').disabled = busy || !passes.length || stage === 'finished';
   byId('finish').textContent = stage === 'review' || stage === 'finished' ? 'Save and finish' : 'Finish with current results';
@@ -480,11 +483,15 @@ function startReset() {
     downloadReport('before-reset');
   }
   run(async () => {
-    const order = layout.boards.filter(board => board !== layout.master).concat(layout.master);
-    prompt('Recovery in progress', 'Keep the locker USB connected. The tool resets the fitted boards, with the master last, then checks for replies again.', 'resetting');
-    log('Action', 'Reset order ' + order.join(', ') + '.');
+    const cabinetReset = layout.master === 'C';
+    const targets = cabinetReset ? [layout.master] : layout.boards.filter(board => board !== layout.master).concat(layout.master);
+    const instruction = cabinetReset
+      ? 'Keep the locker USB connected. The tool resets master board C, which restarts the other boards, then checks all fitted boards.'
+      : 'Keep the locker USB connected. The tool resets the fitted boards, with the master last, then checks for replies again.';
+    prompt('Recovery in progress', instruction, 'resetting');
+    log('Action', cabinetReset ? 'Resetting master C and checking all fitted boards.' : 'Reset order ' + targets.join(', ') + '.');
     resetWriteAt = 0;
-    for (const board of order) {
+    for (const board of targets) {
       if (!watch.present || !transport.connected) {
         await waitForResetPort();
         if (!await openPort()) {

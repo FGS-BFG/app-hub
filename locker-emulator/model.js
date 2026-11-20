@@ -42,6 +42,7 @@ class Board {
   clearAt = null;
   resetAt = null;
   resetPowerAt = null;
+  announceReset = true;
   heartbeatAt = null;
   diagnosticAt = null;
   diagnosticBay = 0;
@@ -200,6 +201,10 @@ export class Locker {
         ? 'No reply · Board ' + address + ' is offline' : 'No reply · check controller address');
       return '';
     }
+    if (board.resetAt !== null && board.resetPowerAt === null) {
+      this.event('BOARD', 'No reply · Board ' + address + ' is restarting');
+      return '';
+    }
     const result = this.execute(board, address, body, Boolean(match?.[2]));
     const active = this.activeLockCount;
     if (active > lockLimit) {
@@ -278,8 +283,15 @@ export class Locker {
       return say(seconds ? 'Heartbeat ' + seconds + ' Seconds' : 'Heartbeat Check Cancelled');
     }
     if (body === 'RST') {
-      board.resetPowerAt = this.clock() + 1800 * board.speed / 8;
-      board.resetAt = board.resetPowerAt + 3000;
+      const resetPowerAt = this.clock() + 1800 * board.speed / 8;
+      const cabinetReset = address === 'C' && address === this.master;
+      for (const [target, controller] of Object.entries(this.boards)) {
+        if ((!cabinetReset && target !== address) || this.offlineBoards.has(target)) continue;
+        controller.resetPowerAt = resetPowerAt;
+        controller.resetAt = resetPowerAt + 3000;
+        controller.announceReset = target === address;
+      }
+      if (cabinetReset) this.event('BOARD', 'Resetting master C and the other online boards in this cabinet');
       return line((address === this.master ? 'SYSTEM' : 'REMOTE') + '_Reset in 5 seconds...');
     }
     if (body === 'DST') {
@@ -347,25 +359,29 @@ export class Locker {
   tick() {
     if (!this.powerOn) return '';
     const now = this.clock();
+    const resetting = new Set();
+    for (const [address, board] of Object.entries(this.boards)) {
+      if (board.resetPowerAt === null || now < board.resetPowerAt || this.offlineBoards.has(address)) continue;
+      board.clear();
+      board.resetPowerAt = null;
+      board.heartbeatAt = null;
+      board.directOutputs &= ~0x1000;
+      resetting.add(address);
+    }
+    if (resetting.size) this.delayedReplies = this.delayedReplies.filter(reply => !resetting.has(reply.address));
     let replies = this.flushReplies(now);
     for (const [address, board] of Object.entries(this.boards)) {
       if (this.offlineBoards.has(address)) continue;
       const publish = text => {
         replies += this.publishReply(address, this.reply(address, text), now);
       };
-      if (board.resetPowerAt !== null && now >= board.resetPowerAt) {
-        board.clear();
-        board.resetPowerAt = null;
-        board.directOutputs &= ~0x1000;
-      }
       if (board.resetAt !== null && now >= board.resetAt) {
-        board.clear();
-        board.resetAt = null;
-        board.duration = durations.DR1;
-        board.speed = 8;
-        board.verbose = false;
-        board.locksEnabled = true;
-        board.directOutputs |= 0x1000;
+        const restored = new Board();
+        restored.opened = board.opened;
+        restored.directInputs = board.directInputs;
+        this.boards[address] = restored;
+        this.event('BOARD', 'Board ' + address + ' restarted');
+        if (!board.announceReset) continue;
         publish(firmware);
         if (address === this.master) {
           for (const text of [
@@ -375,6 +391,7 @@ export class Locker {
         } else {
           publish('REMOTE_Reset Done');
         }
+        continue;
       }
       if (board.clearAt !== null && now >= board.clearAt) {
         board.clear();

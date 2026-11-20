@@ -28,6 +28,8 @@ Open the [USB troubleshooting guide](https://fgs-bfg.github.io/app-hub/locker-tr
 
 Share [locker-connection-check.html](https://fgs-bfg.github.io/app-hub/locker-client-check/locker-connection-check.html) as a standalone file. Save it to the computer and open it in desktop Chrome or Edge. The app and recovery photo are embedded. USB access still requires the operator to choose the locker port.
 
+On layouts with master C, recovery sends a single reset to C and then rechecks all fitted boards.
+
 After editing the client app or its shared serial code, run `node locker-client-check/build-standalone.mjs` from the repository root. Commit the generated HTML with the source update.
 
 ## MCI 304 Locker Emulator
@@ -43,5 +45,7 @@ On the Tool Kit OLED, selecting a locker preset shows link status and the select
 The RGB COM emulator sends power, brightness, and the current RGB colour to the Tool Kit OLED. Press **Next** to return to the menu.
 
 Open a cabinet’s service hatch and click any board to disable it. Click it again to restore it. Multiple boards can be disabled independently. The browser lists all disabled boards, and the Pico OLED shows the first offline board by address. Open **Faults** to manage the boards, hold one door open, or delay replies.
+
+Resetting master C restarts the online boards in its cabinet. A reset sent to another board affects that board alone. The browser simulates the locker behaviour, and the Pico forwards serial traffic.
 
 The cabinet trips when a fifth lock is energised at the same time. Coil drive cuts out immediately, and the controller stops replying over serial. Select **Restore power** on the cabinet to restart the controller. Doors keep their physical positions through the power cycle.
