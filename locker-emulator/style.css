@@ -28,6 +28,8 @@ button { border: 1px solid #bbcdcb; border-radius: 7px; padding: 8px 11px; color
 button:hover { background: #e8f2ef; }
 button:disabled { opacity: .58; cursor: default; }
 button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
+.cabinet-picker:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.cabinet-picker button[aria-pressed=true] { background: #145e51; color: #fff; border-color: #145e51; }
 .cabinet-stage {
   padding: 20px clamp(14px, 4vw, 42px) 30px;
   overflow-x: auto;

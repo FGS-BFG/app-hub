@@ -1,10 +1,13 @@
-import {Locker, SerialFrames, boards, bays} from './model.js?v=lock-trip';
+import {Locker, SerialFrames, bays} from './model.js?v=cabinet-count';
 
 const el = id => document.getElementById(id);
 const connectButton = el('connect');
 const help = el('connection-help');
 const encoder = new TextEncoder();
-let locker = new Locker();
+const selectedCount = new URLSearchParams(location.search).get('cabinets');
+const cabinetCount = /^[1-4]$/.test(selectedCount ?? '') ? Number(selectedCount) : 1;
+const createLocker = () => new Locker(undefined, undefined, cabinetCount);
+let locker = createLocker();
 let bridge = null;
 let opening = false;
 let lastRelease = null;
@@ -139,7 +142,7 @@ async function connect() {
   try {
     const port = await navigator.serial.requestPort({filters: [{usbVendorId: 0x239a, usbProductId: 0x80f4}]});
     candidate = new Pico(port);
-    locker = new Locker();
+    locker = createLocker();
     lastRelease = null;
     await candidate.open();
     bridge = candidate;
@@ -160,7 +163,7 @@ function renderTrace() {
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
     if (event.kind !== 'BOARD') continue;
-    const match = /^([A-E])\/([0-9A-F]) · output latched · coil (energised|de-energised)$/.exec(event.message);
+    const match = /^([A-Z])\/([0-9A-F]) · output latched · coil (energised|de-energised)$/.exec(event.message);
     if (match) {
       lastRelease = {board: match[1], bay: bays.indexOf(match[2]), powered: match[3] === 'energised'};
       break;
@@ -262,7 +265,22 @@ function makeBay(address, code, index) {
   return button;
 }
 
-const modules = Object.fromEntries(Array.from(boards, address => {
+const picker = el('cabinet-picker');
+let modules;
+
+function showCabinet(index) {
+  const group = locker.cabinets[index];
+  el('bays').replaceChildren();
+  el('controller-deck').replaceChildren();
+  modules = Object.fromEntries(Array.from(group, makeModule));
+  el('door-status').hidden = true;
+  for (const [position, button] of Array.from(picker.children).entries()) {
+    button.setAttribute('aria-pressed', String(position === index));
+  }
+  render();
+}
+
+function makeModule(address) {
   const buttons = Array.from(bays, (code, index) => makeBay(address, code, index));
   const module = document.createElement('div');
   module.className = 'module';
@@ -284,7 +302,21 @@ const modules = Object.fromEntries(Array.from(boards, address => {
   controller.textContent = address;
   el('controller-deck').append(controller);
   return [address, buttons];
-}));
+}
+
+if (cabinetCount > 1) {
+  picker.hidden = false;
+  el('column-title').textContent = 'Locker cabinets';
+  el('cabinet-capacity').textContent = cabinetCount + ' cabinets · ' + cabinetCount * 80 + ' bays';
+  locker.cabinets.forEach((group, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Cabinet ' + (index + 1);
+    button.title = 'Boards ' + group[0] + '–' + group.at(-1);
+    button.addEventListener('click', () => showCabinet(index));
+    picker.append(button);
+  });
+}
 
 el('service-toggle').addEventListener('click', () => {
   const toggle = el('service-toggle');
@@ -302,4 +334,4 @@ el('restore-power').addEventListener('click', () => {
   render();
 });
 if (!navigator.serial) help.textContent = 'Open this page in desktop Chrome or Edge with serial access enabled.';
-render();
+showCabinet(0);

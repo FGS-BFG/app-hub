@@ -1,4 +1,10 @@
 export const boards = 'ABCDE';
+const cabinetGroups = [boards, 'FGHIJ', 'KLMNO', 'PQRST'];
+
+export function cabinetBoards(count = 1) {
+  return cabinetGroups.slice(0, Number.isInteger(count) && count >= 1 && count <= 4 ? count : 1);
+}
+
 export const bays = '0123456789ABCDEF';
 const lockLimit = 4;
 const firmware = 'Firmware : MCi_304-Fw1.5.9fs';
@@ -57,15 +63,17 @@ class Board {
 }
 
 export class Locker {
-  constructor(clock = () => performance.now(), master = 'C') {
+  constructor(clock = () => performance.now(), master = 'C', cabinetCount = 1) {
     this.clock = clock;
     this.master = master;
     this.started = clock();
-    this.boards = Object.fromEntries(Array.from(boards, address => [address, new Board()]));
+    this.cabinets = cabinetBoards(cabinetCount);
+    this.boards = Object.fromEntries(Array.from(this.cabinets.join(''), address => [address, new Board()]));
     this.events = [];
     this.powerOn = true;
     this.tripCount = null;
-    this.event('SYSTEM', 'Cabinet ready. All 80 doors are closed.');
+    const cabinetStatus = this.cabinets.length === 1 ? 'Cabinet ready' : this.cabinets.length + ' cabinets ready';
+    this.event('SYSTEM', cabinetStatus + '. All ' + Object.keys(this.boards).length * bays.length + ' doors are closed.');
   }
 
   event(kind, message) {
@@ -88,7 +96,7 @@ export class Locker {
 
   restorePower() {
     if (this.powerOn) return;
-    for (const address of boards) {
+    for (const address of Object.keys(this.boards)) {
       const opened = this.boards[address].opened;
       this.boards[address] = new Board();
       this.boards[address].opened = opened;

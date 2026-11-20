@@ -99,3 +99,26 @@ test('global clear, paired commands, timer expiry and reset responses follow the
   now = 7800;
   assert.match(locker.tick(), /<C>Firmware : MCi_304-Fw1\.5\.9fs\n\r<C>Board  ID : 43/);
 });
+
+test('cabinet presets add independent 80-bay groups on the existing serial bus', () => {
+  const groups = ['ABCDE', 'FGHIJ', 'KLMNO', 'PQRST'];
+  for (let count = 1; count <= 4; count++) {
+    const locker = new Locker(undefined, undefined, count);
+    assert.deepEqual(locker.cabinets, groups.slice(0, count));
+    assert.equal(Object.keys(locker.boards).length, 5 * count);
+    assert.match(locker.events[0].message, new RegExp('All ' + 80 * count + ' doors'));
+    assert.match(locker.command('ISB'), /^<C>/);
+    assert.equal(locker.command('ISB#Z'), '');
+  }
+  const locker = new Locker(undefined, undefined, 4);
+  locker.command('LM0#T');
+  assert.equal(locker.move('T', 0), true);
+  assert.match(locker.command('ISB#T'), /00000001~/);
+  assert.match(locker.command('ISB#A'), /00000000~/);
+  for (const address of 'ABCD') locker.command('LM0#' + address);
+  assert.equal(locker.powerOn, false);
+  locker.restorePower();
+  assert.equal(locker.activeLockCount, 0);
+  assert.match(locker.command('ISB#T'), /00000001~/);
+  assert.deepEqual(new Locker(undefined, undefined, 0).cabinets, ['ABCDE']);
+});

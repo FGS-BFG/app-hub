@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCI 304 Locker Emulator</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=lock-trip">
-  <script type="module" src="app.js?v=lock-trip"></script>
+  <link rel="stylesheet" href="style.css?v=cabinet-count">
+  <script type="module" src="app.js?v=cabinet-count"></script>
 </head>
 <body>
   <header class="top">
@@ -17,10 +17,11 @@
   </header>
   <main class="frame workspace">
     <section class="panel cabinet" aria-labelledby="column-title">
-      <div class="panel-head"><div><h2 id="column-title">Locker cabinet</h2><p>5 controllers · 80 bays</p></div><button id="connect" type="button">Connect Pico</button></div>
+      <div class="panel-head"><div><h2 id="column-title">Locker cabinet</h2><p id="cabinet-capacity">5 controllers · 80 bays</p></div><button id="connect" type="button">Connect Pico</button></div>
       <p id="connection-help" class="connection-help" role="status">Plug in the Pico. Connect its cabinet port here and use its other COM port in the locker app.</p>
       <p id="last-release" class="release-status" role="status">No lock release recorded</p>
       <p id="door-status" class="door-status" role="status" hidden></p>
+      <nav id="cabinet-picker" class="cabinet-picker" aria-label="Simulated cabinets" hidden></nav>
       <div class="cabinet-stage">
         <div id="cabinet" class="metal-cabinet" data-power="true">
           <div class="service-hatch">
