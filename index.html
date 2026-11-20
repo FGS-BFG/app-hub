@@ -1,6 +1,29 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FGS App Hub</title><style>
 :root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#152b35;background:#f3f6f5}*{box-sizing:border-box}body{margin:0}header{background:#103a3b;color:white;padding:3rem max(1.5rem,calc((100vw - 1050px)/2))}header p{color:#c7e3dd;max-width:48rem;line-height:1.6}h1{font-size:clamp(2rem,5vw,3rem);margin:.3rem 0}main{max-width:1050px;margin:auto;padding:2rem 1.5rem 4rem}.intro{display:flex;align-items:end;justify-content:space-between;gap:1rem;flex-wrap:wrap}h2{margin-bottom:.4rem}input{border:1px solid #a8bbb6;border-radius:8px;padding:.75rem;width:min(100%,300px);font:inherit}.category{margin-top:2.5rem}.category h2{margin:0}.category p.section-description{color:#526861;margin:.4rem 0 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-top:1.5rem}.card{background:white;border:1px solid #dce7e3;border-radius:12px;padding:1.4rem;display:flex;flex-direction:column;min-height:215px}.tag{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#17705d;font-weight:700}.card h3{margin:.7rem 0 .3rem}.card p{line-height:1.5;color:#526861;flex:1}.links{display:flex;gap:1rem;flex-wrap:wrap}.links a{color:#086b58;font-weight:650;text-underline-offset:3px}footer{color:#526861;font-size:.9rem;margin-top:2rem;line-height:1.5}[hidden]{display:none!important}
-</style></head><body><header><div>FGS / TOOLS</div><h1>App Hub</h1><p>Your apps and project links in one place. Choose an app below to get started.</p></header><main><div class="intro"><div><h2>Your apps</h2><span>Find tools by name or purpose.</span></div><label>Search apps <input id="search" type="search" placeholder="e.g. RGB or quoting"></label></div><section class="category" aria-labelledby="testing"><h2 id="testing">Testing Tools</h2><p class="section-description">Tools for checking and controlling hardware.</p><div class="grid">
+
+.pin-gate{max-width:26rem;padding-top:2rem}
+.pin-panel{background:#fff;border:1px solid #dce7e3;border-radius:12px;padding:1.5rem}
+.pin-panel h2{margin:0 0 1rem}
+.pin-form{display:grid;gap:.75rem}
+.pin-form input{width:100%;letter-spacing:.14em}
+.pin-form button{justify-self:start;background:#103a3b;color:white;border:0;border-radius:8px;padding:.7rem 1.25rem;font:inherit;font-weight:650;cursor:pointer}
+.pin-form button:disabled{opacity:.65;cursor:default}
+.pin-error{margin:0;color:#a32222}
+</style></head><body><header><div>FGS / TOOLS</div><h1>App Hub</h1><p id="hub-summary" hidden>Your apps and project links in one place. Choose an app below to get started.</p></header>
+<main id="pin-gate" class="pin-gate">
+  <section class="pin-panel" aria-labelledby="pin-heading">
+    <h2 id="pin-heading">Enter the App Hub PIN</h2>
+    <form id="pin-form" class="pin-form">
+      <label for="hub-pin">8-digit PIN</label>
+      <input id="hub-pin" type="password" inputmode="numeric" autocomplete="off"
+        pattern="[0-9]{8}" minlength="8" maxlength="8" required aria-describedby="pin-error">
+      <p id="pin-error" class="pin-error" role="alert" hidden></p>
+      <button id="pin-submit" type="submit" disabled>Unlock</button>
+    </form>
+    <noscript><p>Enable JavaScript to unlock the directory.</p></noscript>
+  </section>
+</main>
+<main id="directory" hidden><div class="intro"><div><h2>Your apps</h2><span>Find tools by name or purpose.</span></div><label>Search apps <input id="search" type="search" placeholder="e.g. RGB or quoting"></label></div><section class="category" aria-labelledby="testing"><h2 id="testing">Testing Tools</h2><p class="section-description">Tools for checking and controlling hardware.</p><div class="grid">
 <article class="card"><span class="tag">Browser app · USB preview</span><h3>Locker Control</h3><p>View and unlock doors on the 80-door locker bank. Hardware operation needs testing.</p><div class="links"><a href="locker-visual/">Open app</a></div></article>
 <article class="card"><span class="tag">Browser app · Pico USB</span><h3>MCI 304 Locker Emulator</h3><p>Use a programmed Pico as a virtual 80-door locker. Click the doors and follow live commands and replies.</p><div class="links"><a href="locker-emulator/">Open emulator</a></div></article>
 <article class="card"><span class="tag">USB diagnostics · Preview</span><h3>Locker Troubleshooting</h3><p>Follow the MCI 304 checks, read board replies over USB, monitor sensor changes and download a diagnostic report. Hardware validation is still required.</p><div class="links"><a href="locker-troubleshooting/">Open guide</a></div></article>
@@ -12,4 +35,82 @@
 <article class="card"><span class="tag">Google Apps Script</span><h3>Metal Quoting Tool</h3><p>Open the MTS Quote Desk.</p><div class="links"><a href="https://script.google.com/a/macros/fgs.ltd/s/AKfycbyMBI0kmxU2SE2GknJ9FpQ5MB07BTjTsrCFtIq45M6uaGt6_6szfUG4aY8kPhTVnplrGw/exec">Open app</a><a href="https://github.com/FGS-BFG/metal-quoting-tool">View repository</a></div></article>
 </div></section><section class="category" aria-labelledby="configurators"><h2 id="configurators">Configurators</h2><p class="section-description">Tools for configuring products and layouts.</p><div class="grid">
 <article class="card"><span class="tag">Project · App link needed</span><h3>Locker Configurator</h3><p>Configure locker layouts. The live app link has yet to be confirmed.</p><div class="links"><a href="https://github.com/FGS-BFG/locker-configurator">View repository</a></div></article>
-</div></section><p id="empty" hidden>No apps match your search.</p><footer>Google apps and private repositories require their usual access permissions. The RGB controller uses USB serial in a supported desktop browser.</footer></main><script>const search=document.querySelector('#search'),cards=[...document.querySelectorAll('.card')],sections=[...document.querySelectorAll('.category')],empty=document.querySelector('#empty');search.addEventListener('input',()=>{const q=search.value.trim().toLowerCase();cards.forEach(card=>card.hidden=!(card.textContent+' '+card.closest('.category').querySelector('h2').textContent).toLowerCase().includes(q));sections.forEach(section=>section.hidden=![...section.querySelectorAll('.card')].some(card=>!card.hidden));empty.hidden=cards.some(card=>!card.hidden)});</script></body></html>
+</div></section><p id="empty" hidden>No apps match your search.</p><footer>Google apps and private repositories require their usual access permissions. The RGB controller uses USB serial in a supported desktop browser.</footer></main><script>const search=document.querySelector('#search'),cards=[...document.querySelectorAll('.card')],sections=[...document.querySelectorAll('.category')],empty=document.querySelector('#empty');search.addEventListener('input',()=>{const q=search.value.trim().toLowerCase();cards.forEach(card=>card.hidden=!(card.textContent+' '+card.closest('.category').querySelector('h2').textContent).toLowerCase().includes(q));sections.forEach(section=>section.hidden=![...section.querySelectorAll('.card')].some(card=>!card.hidden));empty.hidden=cards.some(card=>!card.hidden)});
+
+// This screen hides the directory in the browser. GitHub Pages still serves each tool directly.
+(() => {
+  const salt = '0mNlHcA9bljBUwNO1k/A+w=='
+  const verifier = 'lpjXeg3KY+0g522/9QvVP/sdrwQiSRYo+eS6l+Nl9sg='
+  const sessionKey = 'fgs-app-hub-unlocked:' + salt
+  const gate = document.querySelector('#pin-gate')
+  const directory = document.querySelector('#directory')
+  const form = document.querySelector('#pin-form')
+  const field = document.querySelector('#hub-pin')
+  const submit = document.querySelector('#pin-submit')
+  const error = document.querySelector('#pin-error')
+
+  function unlock() {
+    field.value = ''
+    gate.hidden = true
+    directory.hidden = false
+    document.querySelector('#hub-summary').hidden = false
+  }
+
+  function showError(message) {
+    error.textContent = message
+    error.hidden = false
+  }
+
+  try {
+    if (sessionStorage.getItem(sessionKey) === 'yes') {
+      unlock()
+      return
+    }
+  } catch {
+    // The directory can still unlock when browser storage is disabled.
+  }
+
+  if (!globalThis.crypto?.subtle) {
+    showError('Open the HTTPS App Hub link to use the PIN screen.')
+    return
+  }
+
+  submit.disabled = false
+  field.focus()
+  form.addEventListener('submit', async event => {
+    event.preventDefault()
+    if (submit.disabled || !field.reportValidity()) return
+
+    submit.disabled = true
+    error.hidden = true
+    try {
+      const key = await crypto.subtle.importKey(
+        'raw', new TextEncoder().encode(field.value), 'PBKDF2', false, ['deriveBits']
+      )
+      const digest = await crypto.subtle.deriveBits({
+        name: 'PBKDF2',
+        salt: Uint8Array.from(atob(salt), character => character.charCodeAt(0)),
+        iterations: 150000,
+        hash: 'SHA-256'
+      }, key, 256)
+      if (btoa(String.fromCharCode(...new Uint8Array(digest))) !== verifier) {
+        showError('Incorrect PIN. Try again.')
+        field.select()
+        return
+      }
+
+      try {
+        sessionStorage.setItem(sessionKey, 'yes')
+      } catch {
+        // Storage is optional for the current page.
+      }
+      unlock()
+      document.querySelector('#search').focus()
+    } catch {
+      showError('The PIN could not be checked. Try again.')
+    } finally {
+      submit.disabled = false
+    }
+  })
+})()
+</script></body></html>
