@@ -42,6 +42,6 @@ On the Tool Kit OLED, selecting a locker preset shows link status and the select
 
 The RGB COM emulator sends power, brightness, and the current RGB colour to the Tool Kit OLED. Press **Next** to return to the menu.
 
-Open **Faults** on a cabinet to silence one controller, hold one door open, or delay replies. These faults apply only to that cabinet and can be cleared with its controls.
+Open a cabinet’s service hatch and click any board to disable it. Click it again to restore it. Multiple boards can be disabled independently. The browser lists all disabled boards, and the Pico OLED shows the first offline board by address. Open **Faults** to manage the boards, hold one door open, or delay replies.
 
 The cabinet trips when a fifth lock is energised at the same time. Coil drive cuts out immediately, and the controller stops replying over serial. Select **Restore power** on the cabinet to restart the controller. Doors keep their physical positions through the power cycle.

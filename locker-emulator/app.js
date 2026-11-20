@@ -1,4 +1,4 @@
-import {Locker, SerialFrames, boards, bays} from './model.js?v=oled-details';
+import {Locker, SerialFrames, boards, bays} from './model.js?v=board-toggles';
 
 const el = id => document.getElementById(id);
 const help = el('connection-help');
@@ -28,7 +28,7 @@ class Pico {
 
   newSession(previous) {
     const locker = new Locker();
-    locker.setOfflineBoard(previous.offlineBoard);
+    for (const address of previous.offlineBoards) locker.setBoardOffline(address, true);
     locker.setReplyDelay(previous.replyDelay);
     if (previous.stuckDoor) locker.setStuckDoor(previous.stuckDoor.address, previous.stuckDoor.bay);
     return locker;
@@ -118,7 +118,9 @@ class Pico {
 
   syncDisplay(channel) {
     if (this.mode !== 'multi' || this.closing) return;
-    const {powerOn, offlineBoard, stuckDoor, replyDelay} = channel.locker;
+    const {powerOn, offlineBoards, stuckDoor, replyDelay} = channel.locker;
+    // The current OLED protocol has one slot for an offline board address.
+    const offlineBoard = [...boards].find(address => offlineBoards.has(address));
     const fields = [powerOn ? 1 : 0, offlineBoard ?? '-', stuckDoor?.address ?? '-',
       stuckDoor ? stuckDoor.bay + 1 : 0, replyDelay];
     const line = '@F' + channel.number + ':' + fields.join(':') + '\n';
@@ -260,10 +262,11 @@ function renderConnection() {
   connectButton.textContent = bridge ? 'Disconnect Pico' : 'Connect Pico';
   el('connection').textContent = bridge ? 'Pico connected' : opening ? 'Connecting' : 'Pico disconnected';
   for (const panel of panels) {
-    for (const field of ['offline-board', 'reply-delay', 'stuck-board', 'stuck-door', 'apply-stuck']) {
+    for (const field of ['reply-delay', 'stuck-board', 'stuck-door', 'apply-stuck']) {
       panel.parts[field].disabled = opening;
     }
     panel.parts['clear-stuck'].disabled = opening || !panel.locker.stuckDoor;
+    for (const {controller} of Object.values(panel.modules)) controller.disabled = opening;
   }
 }
 
@@ -288,14 +291,19 @@ function renderCabinet(panel) {
       + (lastRelease.powered ? '' : ' · no coil power')
     : 'No lock release recorded';
   if (release.textContent !== label) release.textContent = label;
-  const faultCount = Number(Boolean(locker.offlineBoard)) + Number(Boolean(locker.stuckDoor)) + Number(locker.replyDelay > 0);
+  const faultCount = locker.offlineBoards.size + Number(Boolean(locker.stuckDoor)) + Number(locker.replyDelay > 0);
   const faultLabel = faultCount ? 'Faults (' + faultCount + ')' : 'Faults';
   if (parts['fault-summary'].textContent !== faultLabel) parts['fault-summary'].textContent = faultLabel;
   parts['clear-stuck'].disabled = opening || !locker.stuckDoor;
+  const offline = [...boards].filter(address => locker.offlineBoards.has(address));
+  const boardStatus = offline.length ? 'Offline: ' + offline.join(', ') : 'All boards enabled';
+  if (parts['board-status'].textContent !== boardStatus) parts['board-status'].textContent = boardStatus;
   for (const [address, {buttons, module, controller}] of Object.entries(modules)) {
-    const online = address !== locker.offlineBoard;
+    const online = !locker.offlineBoards.has(address);
     module.dataset.online = online;
     controller.dataset.online = online;
+    controller.setAttribute('aria-pressed', String(!online));
+    controller.title = (online ? 'Disable board ' : 'Enable board ') + address;
     const board = locker.boards[address];
     buttons.forEach((button, index) => {
       const open = Boolean(board.opened & (1 << index));
@@ -342,7 +350,7 @@ function makeBay(address, code, index, panel) {
       if (!locker.move(address, index)) {
         if (locker.stuckDoor?.address === address && locker.stuckDoor.bay === index) {
           status.textContent = 'Board ' + address + ', door ' + (index + 1) + ' is stuck open.';
-        } else if (address === locker.offlineBoard) {
+        } else if (locker.offlineBoards.has(address)) {
           status.textContent = 'Board ' + address + ' is offline.';
         } else {
           status.textContent = locker.powerOn
@@ -375,22 +383,28 @@ function makeModule(address, panel) {
   }
   module.append(label, doors);
   parts.bays.append(module);
-  const controller = document.createElement('div');
+  const controller = document.createElement('button');
+  controller.type = 'button';
   controller.className = 'controller';
+  controller.dataset.board = address;
+  controller.setAttribute('aria-label', 'Disable board ' + address);
   controller.textContent = address;
+  controller.addEventListener('click', () => {
+    const {locker} = panel;
+    locker.setBoardOffline(address, !locker.offlineBoards.has(address));
+    parts['door-status'].hidden = true;
+    renderCabinet(panel);
+  });
   parts['controller-deck'].append(controller);
   return [address, {buttons, module, controller}];
 }
 
 function bindFaultControls(panel) {
   const {parts} = panel;
-  const offline = parts['offline-board'];
   const delay = parts['reply-delay'];
   const board = parts['stuck-board'];
   const door = parts['stuck-door'];
-  offline.add(new Option('Off', ''));
   for (const address of boards) {
-    offline.add(new Option(address, address));
     board.add(new Option(address, address));
   }
   for (let bay = 0; bay < bays.length; bay++) door.add(new Option(String(bay + 1), String(bay)));
@@ -400,7 +414,6 @@ function bindFaultControls(panel) {
     parts['door-status'].hidden = true;
     renderCabinet(panel);
   }
-  offline.addEventListener('change', () => changeFault(locker => locker.setOfflineBoard(offline.value || null)));
   delay.addEventListener('change', () => changeFault(locker => locker.setReplyDelay(Number(delay.value))));
   parts['apply-stuck'].addEventListener('click',
     () => changeFault(locker => locker.setStuckDoor(board.value, Number(door.value))));
@@ -426,11 +439,17 @@ function makeCabinet(index) {
   const toggle = parts['service-toggle'];
   deck.id = 'controller-deck-' + suffix;
   toggle.setAttribute('aria-controls', deck.id);
-  toggle.addEventListener('click', () => {
-    const expanded = toggle.getAttribute('aria-expanded') === 'true';
-    toggle.setAttribute('aria-expanded', String(!expanded));
-    toggle.firstElementChild.textContent = expanded ? 'Open service hatch' : 'Close service hatch';
-    deck.hidden = expanded;
+  function setHatch(expanded) {
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.firstElementChild.textContent = expanded ? 'Close service hatch' : 'Open service hatch';
+    deck.hidden = !expanded;
+  }
+  toggle.addEventListener('click', () => setHatch(deck.hidden));
+  parts['manage-boards'].addEventListener('click', () => {
+    parts['fault-summary'].closest('details').open = false;
+    setHatch(true);
+    const first = deck.querySelector('.controller:not(:disabled)');
+    (first || toggle).focus();
   });
   const panel = {
     parts,

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCI 304 Locker Emulator</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=cabinet-faults">
-  <script type="module" src="app.js?v=oled-details"></script>
+  <link rel="stylesheet" href="style.css?v=board-toggles">
+  <script type="module" src="app.js?v=board-toggles"></script>
 </head>
 <body>
   <header class="top">
@@ -34,7 +34,10 @@
           <details class="fault-controls">
             <summary data-part="fault-summary">Faults</summary>
             <div class="fault-fields">
-              <label>Offline controller <select data-part="offline-board"></select></label>
+              <div class="board-faults">
+                <span data-part="board-status">All boards enabled</span>
+                <button type="button" data-part="manage-boards">Manage boards</button>
+              </div>
               <label>Reply delay
                 <select data-part="reply-delay">
                   <option value="0">Off</option>

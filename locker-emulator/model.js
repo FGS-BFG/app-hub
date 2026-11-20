@@ -67,7 +67,7 @@ export class Locker {
     this.events = [];
     this.powerOn = true;
     this.tripCount = null;
-    this.offlineBoard = null;
+    this.offlineBoards = new Set();
     this.stuckDoor = null;
     this.replyDelay = 0;
     this.delayedReplies = [];
@@ -92,12 +92,14 @@ export class Locker {
     return count;
   }
 
-  setOfflineBoard(address) {
-    if (address !== null && !Object.hasOwn(this.boards, address)) return;
-    if (address === this.offlineBoard) return;
-    if (this.offlineBoard) this.event('FAULT', 'Board ' + this.offlineBoard + ' is responding again');
-    this.offlineBoard = address;
-    if (!address) return;
+  setBoardOffline(address, offline) {
+    if (!Object.hasOwn(this.boards, address) || this.offlineBoards.has(address) === offline) return;
+    if (!offline) {
+      this.offlineBoards.delete(address);
+      this.event('FAULT', 'Board ' + address + ' is responding again');
+      return;
+    }
+    this.offlineBoards.add(address);
     const opened = this.boards[address].opened;
     this.boards[address] = new Board();
     this.boards[address].opened = opened;
@@ -161,7 +163,7 @@ export class Locker {
   }
 
   coilActive(address, bay) {
-    return this.powerOn && address !== this.offlineBoard && Boolean(this.boards[address].outputs & (1 << bay));
+    return this.powerOn && !this.offlineBoards.has(address) && Boolean(this.boards[address].outputs & (1 << bay));
   }
 
   move(address, bay) {
@@ -180,7 +182,8 @@ export class Locker {
     }
     board.opened ^= mask;
     const doorState = opened ? ' opened' : ' closed';
-    const sensorState = this.powerOn ? ' · sensor bit ' + Number(opened) : ' · controller offline';
+    const sensorState = this.powerOn && !this.offlineBoards.has(address)
+      ? ' · sensor bit ' + Number(opened) : ' · controller offline';
     this.event('DOOR', label + doorState + sensorState);
     return true;
   }
@@ -192,8 +195,8 @@ export class Locker {
     const address = match?.[2] ?? this.master;
     this.event('TX', visible(raw + '\r'));
     const board = this.boards[address];
-    if (!board || address === this.offlineBoard) {
-      this.event('FAULT', address === this.offlineBoard
+    if (!board || this.offlineBoards.has(address)) {
+      this.event('FAULT', this.offlineBoards.has(address)
         ? 'No reply · Board ' + address + ' is offline' : 'No reply · check controller address');
       return '';
     }
@@ -346,7 +349,7 @@ export class Locker {
     const now = this.clock();
     let replies = this.flushReplies(now);
     for (const [address, board] of Object.entries(this.boards)) {
-      if (address === this.offlineBoard) continue;
+      if (this.offlineBoards.has(address)) continue;
       const publish = text => {
         replies += this.publishReply(address, this.reply(address, text), now);
       };

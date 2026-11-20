@@ -109,7 +109,12 @@ button:focus-visible { outline: 3px solid #cf8309; outline-offset: 2px; }
   border: 1px solid #86a994; background: repeating-linear-gradient(90deg, #2f604e 0 4px, #386a55 4px 5px); font: 700 .74rem ui-monospace, monospace;
 }
 .controller::before { content: ""; display: block; width: 17px; height: 7px; margin: auto auto 4px; background: #202d2a; border-inline: 3px dotted #d8b785; }
-.controller[data-online=false] { background: #59403c; }
+.controller[data-online=true]:not(:disabled):hover { background: #347963; }
+.controller[data-online=false] { background: #59403c; border-color: #e6a49b; color: #fff2ed; }
+.controller[data-online=false]::before { background: #68342c; border-color: #a96859; }
+.controller[data-online=false]::after { content: "OFF"; display: block; font-size: .55rem; }
+.controller[data-online=false]:not(:disabled):hover { background: #754a42; }
+.board-faults { display: flex; justify-content: space-between; gap: 7px; align-items: center; }
 .bays { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--module-gap); }
 .module {
   min-width: 0; padding: 0 3px 4px;
