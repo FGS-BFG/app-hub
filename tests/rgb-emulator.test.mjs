@@ -139,3 +139,21 @@ test('Pico rejects the other interface when it cannot complete the bridge handsh
   assert.equal(port.readable.locked, false);
   assert.equal(port.writable.locked, false);
 });
+
+test('RGB bridge sends OLED state on connection and only when the state changes', async t => {
+  const { port, writes, push } = picoPort();
+  const firmware = new RGBFirmware();
+  const bridge = new Bridge(port, bytes => firmware.feed(bytes),
+    error => assert.fail(error.message), () => firmware.state);
+  t.after(() => bridge.close());
+  await bridge.open();
+  assert.deepEqual(writes, ['\n?\n', '@R:0:100:FFFFFF\n']);
+  const frame = text => '>' + Buffer.from(text).toString('hex') + '\n';
+  push(frame('SET 161,178,195\nBRIGHT 70\n'));
+  await until(() => writes.includes('@R:1:70:A1B2C3\n'));
+  push(frame('GET\n'));
+  await until(() => writes.length === 5);
+  assert.deepEqual(writes.filter(line => line.startsWith('@R')), [
+    '@R:0:100:FFFFFF\n', '@R:1:70:A1B2C3\n',
+  ]);
+});

@@ -395,10 +395,11 @@ const RGBPicoBridge = (() => {
   const encoder = new TextEncoder();
 
   class Bridge {
-    constructor(port, receive, onLost) {
+    constructor(port, receive, onLost, displayState) {
       this.port = port;
       this.receive = receive;
       this.onLost = onLost;
+      this.displayState = displayState;
     }
 
     async open() {
@@ -418,6 +419,7 @@ const RGBPicoBridge = (() => {
         }
         if (this.failure) throw this.failure;
         if (!this.ready) throw new Error('No Pico bridge reply. Try the other Pico COM port.');
+        await this.syncDisplay();
       } catch (error) {
         await this.close();
         throw error;
@@ -443,6 +445,7 @@ const RGBPicoBridge = (() => {
             } else if (this.ready && /^>(?:[\da-f]{2})+$/i.test(line)) {
               const bytes = Uint8Array.from(line.slice(1).match(/../g), pair => parseInt(pair, 16));
               await this.send(this.receive(bytes));
+              await this.syncDisplay();
             }
           }
           if (pending.length > 1024) throw new Error('Invalid data from the Pico bridge.');
@@ -454,6 +457,16 @@ const RGBPicoBridge = (() => {
           if (this.ready) this.onLost(error);
         }
       }
+    }
+
+    async syncDisplay() {
+      if (this.closing || !this.displayState) return;
+      const {on, brightness, rgb} = this.displayState();
+      const colour = rgb.map(value => value.toString(16).padStart(2, '0')).join('').toUpperCase();
+      const line = '@R:' + Number(on) + ':' + brightness + ':' + colour + '\n';
+      if (line === this.displayStatus) return;
+      this.displayStatus = line;
+      await this.writer.write(encoder.encode(line));
     }
 
     async send(reply) {
@@ -612,7 +625,7 @@ const RGBPicoBridge = (() => {
         renderEmulator(firmware.state);
         const candidate = new RGBPicoBridge.Bridge(port, receive, error => {
           if (bridge === candidate && !busy) void disconnectBridge(error.message);
-        });
+        }, () => firmware.state);
         await candidate.open();
         bridge = candidate;
       } catch (error) {

@@ -1,4 +1,4 @@
-import {Locker, SerialFrames, boards, bays} from './model.js?v=cabinet-faults';
+import {Locker, SerialFrames, boards, bays} from './model.js?v=oled-details';
 
 const el = id => document.getElementById(id);
 const help = el('connection-help');
@@ -62,6 +62,7 @@ class Pico {
     this.timer = setInterval(() => {
       for (const channel of this.channels) {
         this.writeReply(channel, channel.locker.tick());
+        this.syncDisplay(channel);
         if (channel.locker.events.at(-1) !== channel.panel.renderedEvent) updatePanel(channel.panel);
       }
     }, 30);
@@ -115,18 +116,35 @@ class Pico {
     }
   }
 
+  syncDisplay(channel) {
+    if (this.mode !== 'multi' || this.closing) return;
+    const {powerOn, offlineBoard, stuckDoor, replyDelay} = channel.locker;
+    const fields = [powerOn ? 1 : 0, offlineBoard ?? '-', stuckDoor?.address ?? '-',
+      stuckDoor ? stuckDoor.bay + 1 : 0, replyDelay];
+    const line = '@F' + channel.number + ':' + fields.join(':') + '\n';
+    if (line === channel.displayStatus) return;
+    channel.displayStatus = line;
+    this.enqueueWrite(() => this.writer.write(encoder.encode(line)));
+  }
+
+  enqueueWrite(write) {
+    this.outgoing = this.outgoing.then(() => {
+      if (!this.closing) return write();
+    }).catch(error => {
+      if (!this.closing && bridge === this) void disconnect(error.message);
+    });
+  }
+
   writeReply(channel, reply) {
     if (!reply || this.closing || !channel.locker.powerOn) return;
     const frames = channel.frames;
     const prefix = this.mode === 'multi' ? '<' + channel.number + ':' : '<';
-    this.outgoing = this.outgoing.then(async () => {
+    this.enqueueWrite(async () => {
       for (let offset = 0; offset < reply.length; offset += 64) {
         if (this.closing || !channel.locker.powerOn || frames !== channel.frames) return;
         const hex = Array.from(reply.slice(offset, offset + 64), byte => byte.charCodeAt(0).toString(16).padStart(2, '0')).join('');
         await this.writer.write(encoder.encode(prefix + hex + '\n'));
       }
-    }).catch(error => {
-      if (!this.closing && bridge === this) void disconnect(error.message);
     });
   }
 
