@@ -67,7 +67,7 @@ function initialisePage() {
     const { version } = installed;
     byId('installed').textContent = version ? 'v' + version : 'Earlier firmware';
     if (!version) {
-      status.textContent = 'Tool Kit detected. This firmware does not report a version. Use the two-button shortcut for the first update.';
+      status.textContent = 'Tool Kit detected. This firmware does not report a version.';
     } else if (!release) {
       status.textContent = 'Installed version checked. The latest version is currently unavailable.';
     } else {
