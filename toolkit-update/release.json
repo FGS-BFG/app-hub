@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
-  "filename": "fgs_toolkit.uf2",
+  "filename": "FGS-Toolkit-1.0.0.uf2",
   "summary": "Adds the Firmware Update menu and USB firmware version checks.",
   "sha256": "60173ee8702f1e32df6f72b426760e70813b2891a7ff9200aa773a98d45341f7",
-  "download": "https://github.com/callhimgeorge/pico-digital-toolkit/blob/c713c0b00c094cd621be94c664b4a08631a69c28/firmware/multi-com/fgs_toolkit.uf2"
+  "download": "./releases/FGS-Toolkit-1.0.0.uf2"
 }

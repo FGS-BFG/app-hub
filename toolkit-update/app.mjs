@@ -80,18 +80,18 @@ function initialisePage() {
 
   async function loadRelease() {
     try {
-      const response = await fetch('./release.json', { cache: 'no-store' });
+      const response = await fetch('./release.json?v=public-uf2', { cache: 'no-store' });
       if (!response.ok) throw new Error('Release lookup failed');
       const data = await response.json();
       if (!/^\d+\.\d+\.\d+$/.test(data.version) || !/^[a-f0-9]{64}$/.test(data.sha256)
-        || !data.download.startsWith('https://github.com/')) throw new Error('Invalid release data');
+        || data.filename !== ('FGS-Toolkit-' + data.version + '.uf2')
+        || data.download !== ('./releases/' + data.filename)) throw new Error('Invalid release data');
       release = data;
 
       byId('latest').textContent = 'v' + release.version;
       byId('release-summary').textContent = release.summary;
       byId('download').href = release.download;
       byId('download').hidden = false;
-      byId('download-help').hidden = false;
       byId('filename').textContent = release.filename;
       byId('checksum').textContent = release.sha256;
       byId('version-details').hidden = false;

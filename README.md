@@ -49,3 +49,7 @@ Open a cabinet’s service hatch and click any board to disable it. Click it aga
 Resetting master C restarts the online boards in its cabinet. A reset sent to another board affects that board alone. The browser simulates the locker behaviour, and the Pico forwards serial traffic.
 
 The cabinet trips when a fifth lock is energised at the same time. Coil drive cuts out immediately, and the controller stops replying over serial. Select **Restore power** on the cabinet to restart the controller. Doors keep their physical positions through the power cycle.
+
+## FGS Tool Kit firmware
+
+Keep each verified RP2040 build in toolkit-update/releases as FGS-Toolkit-VERSION.uf2. In the same commit, update toolkit-update/release.json with the version, filename, relative download path, SHA-256 and release summary. GitHub Pages serves the compiled UF2 as a public download.
