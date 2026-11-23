@@ -6,50 +6,94 @@
   <meta name="robots" content="noindex">
   <title>Screenless Tool Kit setup | FGS App Hub</title>
   <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="dashboard.css">
   <script type="module" src="setup.mjs?v=direct-usb"></script>
   <script type="module" src="../flash-ui.mjs"></script>
 </head>
-<body>
-  <header>
+<body class="headless">
+  <header class="hero">
     <div class="wrap">
-      <a href="../">Tool Kit firmware</a>
-      <h1>Screenless Tool Kit setup</h1>
-      <p>Open an emulator, check the firmware or put the screenless Tool Kit into update mode.</p>
+      <nav class="hero-nav" aria-label="Tool Kit">
+        <a href="../../">FGS App Hub</a>
+        <a href="../">OLED firmware</a>
+      </nav>
+      <h1>Screenless Tool Kit</h1>
+      <p>Launch the locker and RGB tools, or update the Pico firmware.</p>
     </div>
   </header>
   <main class="wrap">
-    <div class="versions">
-      <section class="card" aria-labelledby="installed-title">
-        <h2 id="installed-title">Installed firmware</h2>
-        <p class="version" id="installed">Unknown</p>
-        <p id="status" role="status">Connect the Tool Kit by USB. Choose its Setup / Firmware COM port.</p>
-        <button type="button" id="check" disabled>Check setup port</button>
-        <button type="button" id="boot" disabled style="margin-top:.65rem">Enter update mode</button>
-        <noscript><p>Enable JavaScript to check the firmware over USB.</p></noscript>
-      </section>
-      <section class="card" aria-labelledby="release-title">
-        <h2 id="release-title">Screenless firmware</h2>
-        <p class="version" id="latest">Loading…</p>
-        <p>For the RP2040 Tool Kit without an OLED or external buttons.</p>
-        <button type="button" id="flash-device" data-model="Screenless" data-manifest="./headless/release.json" disabled>Install over USB</button>
-        <p id="flash-status" role="status">Put the Tool Kit into update mode before installing.</p>
-        <a class="action" id="download" download hidden>Download firmware (.uf2)</a>
-      </section>
-    </div>
     <section aria-labelledby="tools">
-      <h2 id="tools">Open an emulator</h2>
-      <p>Select the <strong>Browser bridge</strong> COM port in the emulator. Use the separate <strong>Locker 1 / RGB</strong> through <strong>Locker 4</strong> ports in the client app.</p>
-      <ul>
-        <li>Locker Emulator
-          (<a href="../../locker-emulator/?cabinets=1">1 cabinet</a>,
-          <a href="../../locker-emulator/?cabinets=2">2 cabinets</a>,
-          <a href="../../locker-emulator/?cabinets=3">3 cabinets</a>,
-          <a href="../../locker-emulator/?cabinets=4">4 cabinets</a>)
-        </li>
-        <li><a href="../../rgb-controller/?emulator=1&amp;com=1">RGB Emulator</a></li>
-      </ul>
+      <h2 class="section-title" id="tools">Emulators</h2>
+      <div class="tool-grid">
+        <article class="tool-card">
+          <div class="tool-visual lockers-visual" aria-hidden="true">
+            <span class="cabinet"></span><span class="cabinet"></span>
+            <span class="cabinet"></span><span class="cabinet"></span>
+          </div>
+          <div class="tool-content">
+            <h3>Locker Emulator</h3>
+            <p>Simulate up to four cabinets and test door releases from the locker app.</p>
+            <form action="../../locker-emulator/" method="get">
+              <fieldset class="cabinet-picker">
+                <legend>Number of cabinets</legend>
+                <label><input type="radio" name="cabinets" value="1" checked><span>1</span></label>
+                <label><input type="radio" name="cabinets" value="2"><span>2</span></label>
+                <label><input type="radio" name="cabinets" value="3"><span>3</span></label>
+                <label><input type="radio" name="cabinets" value="4"><span>4</span></label>
+              </fieldset>
+              <button type="submit">Open Locker Emulator</button>
+            </form>
+          </div>
+          <div class="tool-ports">
+            <span>Emulator <strong>Browser bridge</strong></span>
+            <span>Locker app <strong>Locker 1 / RGB to Locker 4</strong></span>
+          </div>
+        </article>
+        <article class="tool-card">
+          <div class="tool-visual rgb-visual" aria-hidden="true">
+            <div class="rgb-strip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="tool-content">
+            <h3>RGB Emulator</h3>
+            <p>Test colour, brightness and animations on a simulated RGB strip.</p>
+            <p class="rgb-hint">Keep the emulator tab open while using the controller.</p>
+            <div class="tool-actions">
+              <a class="action primary" href="../../rgb-controller/?emulator=1&amp;com=1" target="_blank" rel="noopener">Open RGB Emulator</a>
+              <a class="action" href="../../rgb-controller/" target="_blank" rel="noopener">Open RGB Controller</a>
+            </div>
+          </div>
+          <div class="tool-ports">
+            <span>Emulator <strong>Browser bridge</strong></span>
+            <span>RGB Controller <strong>Locker 1 / RGB</strong></span>
+          </div>
+        </article>
+      </div>
     </section>
-    <section aria-labelledby="install-title">
+
+    <section class="firmware" aria-labelledby="firmware-title">
+      <h2 class="section-title" id="firmware-title">Firmware</h2>
+      <div class="versions">
+        <section class="card" aria-labelledby="installed-title">
+          <h2 id="installed-title">Installed firmware</h2>
+          <p class="version" id="installed">Unknown</p>
+          <p id="status" role="status">Connect the Tool Kit by USB. Choose its Setup / Firmware COM port.</p>
+          <div class="firmware-actions">
+            <button type="button" id="check" disabled>Check setup port</button>
+            <button type="button" class="action" id="boot" disabled>Enter update mode</button>
+          </div>
+          <noscript><p>Enable JavaScript to check the firmware over USB.</p></noscript>
+        </section>
+        <section class="card" aria-labelledby="release-title">
+          <h2 id="release-title">Screenless firmware</h2>
+          <p class="version" id="latest">Loading…</p>
+          <p>For the RP2040 Tool Kit without an OLED or external buttons.</p>
+          <button type="button" id="flash-device" data-model="Screenless" data-manifest="./headless/release.json" disabled>Install over USB</button>
+          <p id="flash-status" role="status">Put the Tool Kit into update mode before installing.</p>
+          <a class="action" id="download" download hidden>Download firmware (.uf2)</a>
+        </section>
+      </div>
+    </section>
+    <section class="install-guide" aria-labelledby="install-title">
       <h2 id="install-title">Install an update</h2>
       <ol>
         <li>Close any emulator using the Tool Kit.</li>
@@ -65,7 +109,7 @@
       </details>
       <details id="release-details" hidden>
         <summary>Download checksum</summary>
-        <p><code id="checksum" style="overflow-wrap:anywhere"></code></p>
+        <p><code id="checksum"></code></p>
       </details>
     </section>
   </main>
