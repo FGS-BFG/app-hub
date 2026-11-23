@@ -31,6 +31,8 @@ button:hover:not(:disabled) { background: #174d49; }
 button:disabled { cursor: default; opacity: .58; }
 .action { background: white; border-color: var(--accent); color: var(--accent); }
 .action:hover { background: #ecf6f1; }
+#flash-status { margin: .6rem 0 .85rem; }
+#flash-device ~ .action { margin-top: 0; }
 :focus-visible { outline: .18rem solid #318574; outline-offset: .19rem; }
 header :focus-visible { outline-color: #bdf2e5; }
 #install-title { font-size: 1.55rem; margin: 2rem 0 .55rem; }

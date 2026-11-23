@@ -6,7 +6,8 @@
   <meta name="robots" content="noindex">
   <title>Firmware Update | FGS Digital Tool Kit</title>
   <link rel="stylesheet" href="styles.css">
-  <script type="module" src="app.mjs?v=public-uf2"></script>
+  <script type="module" src="app.mjs?v=direct-usb"></script>
+  <script type="module" src="flash-ui.mjs"></script>
 </head>
 <body>
   <header>
@@ -30,17 +31,19 @@
         <h2 id="release-title">Latest release</h2>
         <p class="version" id="latest">Loading…</p>
         <p id="release-summary" role="status"></p>
+        <button type="button" id="flash-device" data-model="OLED" data-manifest="./release.json" disabled>Install over USB</button>
+        <p id="flash-status" role="status">Put the Tool Kit into update mode before installing.</p>
         <a class="action" id="download" download hidden>Download firmware (.uf2)</a>
       </section>
     </div>
     <section aria-labelledby="install-title">
       <h2 id="install-title">Install the update</h2>
       <ol>
-        <li>Download the Tool Kit <strong>.uf2</strong> file to your PC.</li>
         <li>On the Tool Kit, open <strong>Firmware Update</strong>. Press <strong>Next</strong> until you see <strong>Install Update</strong>, then press <strong>Select</strong> twice to confirm.</li>
-        <li>In File Explorer, copy the downloaded <strong>.uf2</strong> file to the <strong>RPI-RP2</strong> drive. The drive disappears as the Tool Kit restarts.</li>
+        <li>Click <strong>Install over USB</strong>, select <strong>RP2 Boot</strong> and confirm. The updater verifies the write before restarting.</li>
         <li>Click <strong>Check connected Tool Kit</strong> again and confirm the installed version.</li>
       </ol>
+      <p>For a manual update, download the UF2 and copy it to <strong>RPI-RP2</strong> in File Explorer.</p>
       <details>
         <summary>If the version check fails or the update drive is missing</summary>
         <p>Use desktop Chrome or Edge and a USB data cable. If the OLED shows <strong>COM PORTS CLOSED</strong>, press <strong>Select</strong> to reopen them. If Windows gives the ports similar names, try the Tool Kit’s COM entries until the page identifies the browser bridge.</p>

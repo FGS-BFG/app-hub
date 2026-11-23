@@ -118,7 +118,7 @@ function initialise() {
     check.disabled = boot.disabled = true;
     try {
       await talkToSetupPort(setupPort, true);
-      status.textContent = 'Open RPI-RP2 in File Explorer and copy the downloaded UF2 onto it.';
+      status.textContent = 'Update mode requested. Click Install over USB and choose RP2 Boot.';
       el('installed').textContent = 'Update mode';
       setupPort = null;
       installed = null;

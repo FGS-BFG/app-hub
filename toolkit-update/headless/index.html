@@ -6,7 +6,8 @@
   <meta name="robots" content="noindex">
   <title>Screenless Tool Kit setup | FGS App Hub</title>
   <link rel="stylesheet" href="../styles.css">
-  <script type="module" src="setup.mjs"></script>
+  <script type="module" src="setup.mjs?v=direct-usb"></script>
+  <script type="module" src="../flash-ui.mjs"></script>
 </head>
 <body>
   <header>
@@ -30,6 +31,8 @@
         <h2 id="release-title">Screenless firmware</h2>
         <p class="version" id="latest">Loading…</p>
         <p>For the RP2040 Tool Kit without an OLED or external buttons.</p>
+        <button type="button" id="flash-device" data-model="Screenless" data-manifest="./headless/release.json" disabled>Install over USB</button>
+        <p id="flash-status" role="status">Put the Tool Kit into update mode before installing.</p>
         <a class="action" id="download" download hidden>Download firmware (.uf2)</a>
       </section>
     </div>
@@ -49,14 +52,15 @@
     <section aria-labelledby="install-title">
       <h2 id="install-title">Install an update</h2>
       <ol>
-        <li>Download the screenless UF2. Close any emulator using the Tool Kit.</li>
+        <li>Close any emulator using the Tool Kit.</li>
         <li>In desktop Chrome or Edge, click <strong>Check setup port</strong>. Select the <strong>Setup / Firmware</strong> COM port, then click <strong>Enter update mode</strong> and confirm.</li>
-        <li>Copy the UF2 to the <strong>RPI-RP2</strong> drive in File Explorer. The Tool Kit restarts after the copy.</li>
+        <li>Click <strong>Install over USB</strong>, select <strong>RP2 Boot</strong> and confirm. The updater verifies the write before restarting.</li>
         <li>Click <strong>Check setup port</strong> again and confirm the new version.</li>
       </ol>
+      <p>For a manual update, download the screenless UF2 and copy it to <strong>RPI-RP2</strong> in File Explorer.</p>
       <details>
         <summary>First install and recovery</summary>
-        <p>Hold the Pico board’s onboard <strong>BOOTSEL</strong> button while plugging in USB. When the <strong>RPI-RP2</strong> drive appears, release the button and copy the screenless UF2 onto the drive.</p>
+        <p>Hold the Pico board’s onboard <strong>BOOTSEL</strong> button while plugging in USB. When the <strong>RPI-RP2</strong> drive appears, release the button. Use <strong>Install over USB</strong> above or copy the screenless UF2 onto the drive.</p>
         <p>If Windows lists generic USB Serial Devices, open <strong>Device Manager → Ports (COM &amp; LPT) → Properties → Details → Hardware IDs</strong>. The setup port includes <strong>VID_CAFE&amp;PID_4066&amp;MI_0A</strong>. The browser bridge includes <strong>MI_00</strong>.</p>
       </details>
       <details id="release-details" hidden>
