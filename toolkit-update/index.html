@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Firmware Update | FGS Digital Tool Kit</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a href="../">FGS App Hub</a>
+      <h1>Tool Kit firmware</h1>
+      <p>Check the firmware on your Tool Kit and install the latest release.</p>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="versions">
+      <section class="card" aria-labelledby="installed-title">
+        <h2 id="installed-title">Installed firmware</h2>
+        <p class="version" id="installed">Unknown</p>
+        <p id="connection-status" role="status">Connect the Tool Kit by USB and close any emulator tabs using its ports. When prompted, select its Browser bridge COM port.</p>
+        <button type="button" id="check" disabled>Check connected Tool Kit</button>
+        <noscript><p>Enable JavaScript to check the firmware from this page.</p></noscript>
+      </section>
+      <section class="card" aria-labelledby="release-title">
+        <h2 id="release-title">Latest release</h2>
+        <p class="version" id="latest">Loading…</p>
+        <p id="release-summary" role="status"></p>
+        <a class="action" id="download" hidden>Get UF2 on GitHub</a>
+        <p class="download-help" id="download-help" hidden>Sign in with an account that has access to the Tool Kit repository, then choose <strong>Download raw file</strong>.</p>
+      </section>
+    </div>
+    <section aria-labelledby="install-title">
+      <h2 id="install-title">Install the update</h2>
+      <ol>
+        <li>Download the Tool Kit <strong>.uf2</strong> file to your PC.</li>
+        <li>On the Tool Kit, open <strong>Firmware Update</strong>. Press <strong>Next</strong> until you see <strong>Install Update</strong>, then press <strong>Select</strong> twice to confirm. On earlier firmware, hold <strong>Select</strong> and <strong>Next</strong> together for about three seconds instead.</li>
+        <li>In File Explorer, copy the downloaded <strong>.uf2</strong> file to the <strong>RPI-RP2</strong> drive. The drive disappears as the Tool Kit restarts.</li>
+        <li>Click <strong>Check connected Tool Kit</strong> again and confirm the installed version.</li>
+      </ol>
+      <details>
+        <summary>If the version check fails or the update drive is missing</summary>
+        <p>Use desktop Chrome or Edge and a USB data cable. If the OLED shows <strong>COM PORTS CLOSED</strong>, press <strong>Select</strong> to reopen them. If Windows gives the ports similar names, try the Tool Kit’s COM entries until the page identifies the browser bridge.</p>
+        <p>If the update drive is missing, reconnect the Tool Kit and retry. If the firmware cannot start, hold the Pico board’s physical <strong>BOOTSEL</strong> button while plugging in USB. Release it when <strong>RPI-RP2</strong> appears.</p>
+      </details>
+    </section>
+    <details id="version-details" hidden>
+      <summary>Download details</summary>
+      <dl>
+        <dt>Hardware</dt><dd>FGS Digital Tool Kit with the RP2040 Pico</dd>
+        <dt>Filename</dt><dd id="filename"></dd>
+        <dt>SHA-256</dt><dd><code id="checksum"></code></dd>
+      </dl>
+    </details>
+  </main>
+</body>
+</html>
