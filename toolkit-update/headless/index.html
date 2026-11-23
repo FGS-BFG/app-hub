@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Screenless Tool Kit setup | FGS App Hub</title>
+  <link rel="stylesheet" href="../styles.css">
+  <script type="module" src="setup.mjs"></script>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a href="../">Tool Kit firmware</a>
+      <h1>Screenless Tool Kit setup</h1>
+      <p>Open an emulator, check the firmware or put the screenless Tool Kit into update mode.</p>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="versions">
+      <section class="card" aria-labelledby="installed-title">
+        <h2 id="installed-title">Installed firmware</h2>
+        <p class="version" id="installed">Unknown</p>
+        <p id="status" role="status">Connect the Tool Kit by USB. Choose its Setup / Firmware COM port.</p>
+        <button type="button" id="check" disabled>Check setup port</button>
+        <button type="button" id="boot" disabled style="margin-top:.65rem">Enter update mode</button>
+        <noscript><p>Enable JavaScript to check the firmware over USB.</p></noscript>
+      </section>
+      <section class="card" aria-labelledby="release-title">
+        <h2 id="release-title">Screenless firmware</h2>
+        <p class="version" id="latest">Loading…</p>
+        <p>For the RP2040 Tool Kit without an OLED or external buttons.</p>
+        <a class="action" id="download" download hidden>Download firmware (.uf2)</a>
+      </section>
+    </div>
+    <section aria-labelledby="tools">
+      <h2 id="tools">Open an emulator</h2>
+      <p>Select the <strong>Browser bridge</strong> COM port in the emulator. Use the separate <strong>Locker 1 / RGB</strong> through <strong>Locker 4</strong> ports in the client app.</p>
+      <ul>
+        <li>Locker Emulator
+          (<a href="../../locker-emulator/?cabinets=1">1 cabinet</a>,
+          <a href="../../locker-emulator/?cabinets=2">2 cabinets</a>,
+          <a href="../../locker-emulator/?cabinets=3">3 cabinets</a>,
+          <a href="../../locker-emulator/?cabinets=4">4 cabinets</a>)
+        </li>
+        <li><a href="../../rgb-controller/?emulator=1&amp;com=1">RGB Emulator</a></li>
+      </ul>
+    </section>
+    <section aria-labelledby="install-title">
+      <h2 id="install-title">Install an update</h2>
+      <ol>
+        <li>Download the screenless UF2. Close any emulator using the Tool Kit.</li>
+        <li>In desktop Chrome or Edge, click <strong>Check setup port</strong>. Select the <strong>Setup / Firmware</strong> COM port, then click <strong>Enter update mode</strong> and confirm.</li>
+        <li>Copy the UF2 to the <strong>RPI-RP2</strong> drive in File Explorer. The Tool Kit restarts after the copy.</li>
+        <li>Click <strong>Check setup port</strong> again and confirm the new version.</li>
+      </ol>
+      <details>
+        <summary>First install and recovery</summary>
+        <p>Hold the Pico board’s onboard <strong>BOOTSEL</strong> button while plugging in USB. When the <strong>RPI-RP2</strong> drive appears, release the button and copy the screenless UF2 onto the drive.</p>
+        <p>If Windows lists generic USB Serial Devices, open <strong>Device Manager → Ports (COM &amp; LPT) → Properties → Details → Hardware IDs</strong>. The setup port includes <strong>VID_CAFE&amp;PID_4066&amp;MI_0A</strong>. The browser bridge includes <strong>MI_00</strong>.</p>
+      </details>
+      <details id="release-details" hidden>
+        <summary>Download checksum</summary>
+        <p><code id="checksum" style="overflow-wrap:anywhere"></code></p>
+      </details>
+    </section>
+  </main>
+</body>
+</html>

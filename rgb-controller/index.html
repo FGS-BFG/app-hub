@@ -623,7 +623,7 @@ const RGBPicoBridge = (() => {
       busy = true;
       updateConnection();
       try {
-        const port = await navigator.serial.requestPort({ filters: [RGBPicoBridge.filter, { usbVendorId: 0xcafe, usbProductId: 0x4065 }] });
+        const port = await navigator.serial.requestPort({ filters: [RGBPicoBridge.filter, { usbVendorId: 0xcafe, usbProductId: 0x4065 }, { usbVendorId: 0xcafe, usbProductId: 0x4066 }] });
         firmware.reset();
         renderEmulator(firmware.state);
         const candidate = new RGBPicoBridge.Bridge(port, receive, error => {

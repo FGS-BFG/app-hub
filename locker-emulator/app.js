@@ -8,6 +8,7 @@ const cabinetCount = /^[1-4]$/.test(selectedCount ?? '') ? Number(selectedCount)
 const connectButton = el('connect');
 const bridgeFilters = [
   {usbVendorId: 0xcafe, usbProductId: 0x4065},
+  {usbVendorId: 0xcafe, usbProductId: 0x4066},
   {usbVendorId: 0x239a, usbProductId: 0x80f4},
 ];
 let bridge = null;
